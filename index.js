@@ -34,10 +34,13 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import os from 'node:os'
 import { execFileSync, spawn } from 'node:child_process'
 import path from 'node:path'
@@ -459,13 +462,19 @@ let workspaceRoots = []
  * 会让每个子项目各建一个记忆库。DSH 有 workspaceRegistry，用它才是原生做法，
  * 也正好满足「整个工作区共用一个库」。
  */
-function projectRootFor(cwd) {
+export function projectRootFor(cwd, roots = workspaceRoots) {
   const abs = path.resolve(cwd)
+  // Windows 的路径不分大小写：cwd 的盘符/目录大小写与注册的工作区不一致时，
+  // 区分大小写的比较会悄悄落到另一个（空的）记忆库。返回值仍用注册时的写法，键才稳定。
+  const fold = process.platform === 'win32' ? (p) => p.toLowerCase() : (p) => p
+  const foldedAbs = fold(abs)
   let best = ''
-  for (const root of workspaceRoots) {
+  for (const root of roots) {
     if (!root) continue
     const normalized = path.resolve(String(root))
-    if (abs === normalized || abs.startsWith(normalized + path.sep)) {
+    const foldedRoot = fold(normalized)
+    const prefix = foldedRoot.endsWith(path.sep) ? foldedRoot : foldedRoot + path.sep
+    if (foldedAbs === foldedRoot || foldedAbs.startsWith(prefix)) {
       if (normalized.length > best.length) best = normalized
     }
   }
@@ -487,6 +496,65 @@ const ensureDir = (dir) => mkdirSync(dir, { recursive: true })
 /** 记忆文件与 MEMORY.md 同级平铺（同 Claude Code），没有 memories/ 子目录。 */
 const memoriesPath = (memoryDir) => memoryDir
 const indexPath = (memoryDir) => path.join(memoryDir, INDEX_FILE)
+
+/**
+ * 原子写：先写同目录临时文件再 rename，崩溃/断电时目标文件要么是旧的、要么是新的，
+ * 不会被截成半个。rename 失败（Windows 上编辑器占着文件时是 EPERM/EBUSY）就退回直接写。
+ * 目标是符号链接/junction 时对真实文件操作，否则 rename 会把链接本身换成普通文件。
+ */
+function writeFileAtomic(file, data) {
+  let target = file
+  try {
+    target = realpathSync(file)
+  } catch {
+    // 文件还不存在：就写在原路径
+  }
+  const temp = `${target}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  try {
+    writeFileSync(temp, data, 'utf8')
+    renameSync(temp, target)
+  } catch {
+    try {
+      rmSync(temp, { force: true })
+    } catch {
+      // 临时文件清不掉不影响后续的直接写
+    }
+    writeFileSync(target, data, 'utf8')
+  }
+}
+
+/**
+ * 记忆 id 就是文件名（不含 `.md`），而 id 会从工具参数 / HTTP 请求体里原样进来。
+ * 不过滤的话 `../../../AGENTS` 之类的 id 能读、写、删库外的任意 `.md`。
+ *
+ * 允许：中日韩字符、全角标点（`：（）`）、点号等真实存在的 id 写法；
+ * 拒绝：路径分隔符与 Windows 非法字符（仅 ASCII，全角 `：` 可以）、控制字符、
+ * 首尾空白、结尾的 `.`、`.` / `..`、空串、超过 200 字符。
+ */
+export function isSafeId(id) {
+  if (typeof id !== 'string') return false
+  if (id === '' || id === '.' || id === '..' || id.length > 200) return false
+  if (id !== id.trim() || id.endsWith('.')) return false
+  if (/[\\/:*?"<>|]/.test(id)) return false
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(id)) return false
+  return true
+}
+
+/**
+ * 在 dir 下解析 `name`，并断言结果就在 dir 里（平铺，不含子目录）。不满足返回 null。
+ * 返回 path.join 的结果（与 memoryCache 的键同形），不是 resolve 后的绝对路径。
+ */
+function containedPath(dir, name) {
+  const base = path.resolve(dir)
+  const rel = path.relative(base, path.resolve(base, name))
+  if (!rel || path.isAbsolute(rel) || rel === '..' || rel.startsWith(`..${path.sep}`) || rel.includes(path.sep)) {
+    return null
+  }
+  return path.join(dir, name)
+}
+
+/** `<dir>/<id>.md`；id 不安全或会逃出 dir 时返回 null。 */
+const idFile = (dir, id) => (isSafeId(id) ? containedPath(dir, `${id}.md`) : null)
 
 /**
  * 插件私有状态目录：放在 `memory/` **外面**，与它同级。
@@ -514,7 +582,8 @@ function archiveVersion(memoryDir, id, raw) {
   if (!limit || limit <= 0) return
   if (typeof raw !== 'string' || raw.trim() === '') return
   try {
-    const dir = path.join(historyPath(memoryDir), id)
+    const dir = isSafeId(id) ? containedPath(historyPath(memoryDir), id) : null
+    if (!dir) return
     ensureDir(dir)
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     writeFileSync(path.join(dir, `${stamp}.md`), raw, 'utf8')
@@ -533,8 +602,8 @@ function archiveVersion(memoryDir, id, raw) {
 /** 列出某条记忆的历史版本（新的在前）。 */
 export function listHistory(memoryDir, id) {
   try {
-    const dir = path.join(historyPath(memoryDir), id)
-    if (!existsSync(dir)) return []
+    const dir = isSafeId(id) ? containedPath(historyPath(memoryDir), id) : null
+    if (!dir || !existsSync(dir)) return []
     return readdirSync(dir)
       .filter((name) => name.endsWith('.md'))
       .sort()
@@ -547,27 +616,126 @@ export function listHistory(memoryDir, id) {
 
 /* ------------------------------------------------------------ frontmatter */
 
-/** 极简 YAML frontmatter 解析：只认 `key: value` 与 `key: [a, b]`。 */
+/**
+ * 极简 YAML frontmatter 解析：`key: value` 与 `key: [a, b]`。
+ *
+ * 与 serializeFrontmatter 互为逆运算：序列化器只在「会产生歧义」时才给值加 JSON 引号
+ * （换行、首尾空白、`: `、` #`、以 `[ " ' { # …` 开头、空串），所以普通值仍是裸文本，
+ * 旧文件的解析结果不变。
+ */
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/
+
+/** 这两个键一直是数组：写成 `[...]` 就按数组读，不做括号配对检查（兼容旧文件里含 `]` 的标签）。 */
+const FRONTMATTER_ARRAY_KEYS = new Set(['tags', 'paths'])
+
+/**
+ * 去引号只在「一对配套引号整个包住值」时发生，绝不单端剥：
+ * `Don't use "foo"` 末尾的引号是内容，不是定界符。
+ */
+function decodeScalar(value) {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    try {
+      const decoded = JSON.parse(value)
+      if (typeof decoded === 'string') return decoded
+    } catch {
+      // 不是合法 JSON 串（手写的、或旧版序列化器输出）：退回旧行为，剥掉外层引号
+    }
+    return value.slice(1, -1)
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    const inner = value.slice(1, -1)
+    // 合法的 YAML 单引号串里，内部的 ' 一定成对写成 ''
+    return inner.replace(/''/g, '').includes("'") ? inner : inner.replace(/''/g, "'")
+  }
+  return value
+}
+
+/** 按逗号切数组项，但以 `"` 开头的项按 JSON 字符串整体读（里面的逗号、括号不算）。 */
+function splitFlowItems(inner) {
+  const items = []
+  let pos = 0
+  for (;;) {
+    let start = pos
+    while (start < inner.length && /\s/.test(inner[start])) start += 1
+    if (inner[start] === '"') {
+      let k = start + 1
+      while (k < inner.length && inner[k] !== '"') k += inner[k] === '\\' ? 2 : 1
+      if (k < inner.length) {
+        let m = k + 1
+        while (m < inner.length && /\s/.test(inner[m])) m += 1
+        if (m >= inner.length || inner[m] === ',') {
+          items.push(inner.slice(start, k + 1))
+          if (m >= inner.length) return items
+          pos = m + 1
+          continue
+        }
+      }
+    }
+    const comma = inner.indexOf(',', pos)
+    if (comma < 0) {
+      items.push(inner.slice(pos))
+      return items
+    }
+    items.push(inner.slice(pos, comma))
+    pos = comma + 1
+  }
+}
+
 export function parseFrontmatter(text) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text)
-  if (!match) return { data: {}, body: text }
+  // 记事本等编辑器存成「UTF-8 带 BOM」时，开头的 \uFEFF 会让 `^---` 匹配失败，
+  // 整个 frontmatter 被当成正文——下次写入还会把它嵌进新文件里。
+  const source = typeof text === 'string' && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  const match = FRONTMATTER_RE.exec(source)
+  if (!match) return { data: {}, body: source }
   const data = {}
   for (const line of match[1].split(/\r?\n/)) {
     const kv = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line.trim())
     if (!kv) continue
     const [, key, rawValue] = kv
+    if (key === '__proto__') continue
     const value = rawValue.trim()
-    if (value.startsWith('[') && value.endsWith(']')) {
-      data[key] = value
-        .slice(1, -1)
-        .split(',')
-        .map((item) => item.trim().replace(/^["']|["']$/g, ''))
-        .filter(Boolean)
-    } else {
-      data[key] = value.replace(/^["']|["']$/g, '')
+    if (value.length >= 2 && value.startsWith('[') && value.endsWith(']')) {
+      const items = splitFlowItems(value.slice(1, -1)).map((item) => item.trim())
+      // `[WIP] Foo [x]` 是标量不是数组：括号必须真正整个包住值。
+      // 判据：未加引号的项里不再出现方括号。
+      const enclosed =
+        FRONTMATTER_ARRAY_KEYS.has(key) || items.every((item) => item.startsWith('"') || !/[[\]]/.test(item))
+      if (enclosed) {
+        data[key] = items.map(decodeScalar).filter(Boolean)
+        continue
+      }
     }
+    data[key] = decodeScalar(value)
   }
   return { data, body: match[2] }
+}
+
+/** 标量需要加引号吗：只要裸写会被读歧义（或根本不是合法 YAML）就要。 */
+function needsQuoting(text) {
+  return (
+    text === '' ||
+    text !== text.trim() ||
+    /[\u0000-\u0008\u000a-\u001f\u007f\u2028\u2029]/.test(text) ||
+    /^[["'{#&*!|>%@`]/.test(text) ||
+    /^[-?:]\s/.test(text) ||
+    text.endsWith(':') ||
+    text.includes(': ') ||
+    text.includes(' #')
+  )
+}
+
+/** JSON 引号串。U+2028/2029 要转义：JSON.stringify 原样输出它们，而解析按行匹配时 `.` 不认它们，整行会被丢掉。 */
+const quote = (text) => JSON.stringify(text).replace(/[\u2028\u2029]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16)}`)
+
+const encodeScalar = (value) => {
+  const text = String(value)
+  return needsQuoting(text) ? quote(text) : text
+}
+
+/** 数组项另外要避开流式序列的定界符：逗号、方括号、花括号、引号。 */
+const encodeItem = (value) => {
+  const text = String(value)
+  return needsQuoting(text) || /[,[\]{}"]/.test(text) ? quote(text) : text
 }
 
 function serializeFrontmatter(data, body) {
@@ -576,14 +744,19 @@ function serializeFrontmatter(data, body) {
     if (value === undefined || value === null) continue
     if (Array.isArray(value)) {
       if (value.length === 0) continue
-      lines.push(`${key}: [${value.map((v) => String(v)).join(', ')}]`)
+      lines.push(`${key}: [${value.map(encodeItem).join(', ')}]`)
     } else {
-      lines.push(`${key}: ${value}`)
+      lines.push(`${key}: ${encodeScalar(value)}`)
     }
   }
   lines.push('---', '')
-  return `${lines.join('\n')}\n${String(body).trimEnd()}\n`
+  // 正文开头的空行要剥掉：解析时分隔用的那个空行会留在 body 里，
+  // 不剥的话「读→写」每循环一次文件就多一个空行（每次 recall 都会触发）。
+  return `${lines.join('\n')}\n${String(body).replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()}\n`
 }
+
+/** 标题/摘要是单行字段：换行折成一个空格，作为落盘前最后一道防线。 */
+const oneLine = (text) => String(text ?? '').replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ').trim()
 
 /* ---------------------------------------------------------------- 记忆读写 */
 
@@ -592,14 +765,20 @@ function serializeFrontmatter(data, body) {
  * 中文保留，只把非法文件名字符与空白换成 `-`。
  */
 export function slugify(title) {
-  const cleaned = String(title ?? '')
-    .replace(/[\\/:*?"<>|]/g, '-')
-    .replace(/[\r\n\t]+/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-.]+|[-.]+$/g, '')
+  // 按码点截断（不劈开代理对），截断后再收一次尾部分隔符——结果必须满足 isSafeId，
+  // 否则 writeMemory 会因为「标题派生的 id 不合法」而抛错。
+  const cleaned = Array.from(
+    String(title ?? '')
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/[\u0000-\u001f\u007f-\u009f]+/g, '-')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^[-.]+|[-.]+$/g, ''),
+  )
     .slice(0, 80)
-  return cleaned || `memory-${Date.now().toString(36)}`
+    .join('')
+    .replace(/[-.]+$/g, '')
+  return cleaned && isSafeId(cleaned) ? cleaned : `memory-${Date.now().toString(36)}`
 }
 
 /**
@@ -626,11 +805,19 @@ function humanizeId(id) {
 
 /** 在目录里挑一个不与别的记忆冲突的 slug（selfId 是「自己」，不参与冲突）。 */
 function uniqueSlug(memoryDir, base, selfId) {
-  const taken = new Set(listMemories(memoryDir).map((item) => item.id).filter((id) => id !== selfId))
-  if (!taken.has(base)) return base
+  // Windows / macOS 的文件系统不分大小写：`Docs.md` 与 `docs.md` 是同一个文件，
+  // 区分大小写地比较会让后写的静默覆盖先写的，所以统一按小写判重。
+  const fold = (id) => id.toLowerCase()
+  const self = selfId == null ? null : fold(selfId)
+  const taken = new Set(
+    listMemories(memoryDir)
+      .map((item) => fold(item.id))
+      .filter((id) => id !== self),
+  )
+  if (!taken.has(fold(base))) return base
   for (let i = 2; i < 1000; i += 1) {
     const candidate = `${base}-${i}`
-    if (!taken.has(candidate)) return candidate
+    if (!taken.has(fold(candidate))) return candidate
   }
   return `${base}-${Date.now().toString(36)}`
 }
@@ -658,10 +845,51 @@ function firstLine(text) {
   return ''
 }
 
-/** 读一条记忆（含 frontmatter）。文件不存在返回 undefined。 */
+/**
+ * 标出哪些行在围栏代码块（``` 或 ~~~）里，含围栏行本身。
+ *
+ * 围栏里的 `#` / `## ` 是代码（shell 注释、示例标题），不是 Markdown 标题——
+ * 解析章节、重排编号、下沉标题时都必须跳过它们，否则会把代码改坏。
+ * 规则取 CommonMark 的：开栏 ≥3 个同种字符（缩进 ≤3），收栏同种且不短于开栏、后面无其它文字；
+ * 到文末仍没收栏就一直算围栏内。
+ */
+function fenceMask(lines) {
+  const mask = new Array(lines.length).fill(false)
+  let open = null
+  for (let i = 0; i < lines.length; i += 1) {
+    const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i])
+    if (open) {
+      mask[i] = true
+      if (fence && fence[1][0] === open.char && fence[1].length >= open.length && fence[2].trim() === '') open = null
+    } else if (fence && !(fence[1][0] === '`' && fence[2].includes('`'))) {
+      mask[i] = true
+      open = { char: fence[1][0], length: fence[1].length }
+    }
+  }
+  return mask
+}
+
+/**
+ * 从正文派生 description（MEMORY.md 里每轮注入的那一行摘要）。
+ *
+ * 正文常以 `## 规则` 这样的小节标题开头，只取首行会得到「规则」——一个词，毫无信息量。
+ * 所以优先取第一行**非标题、非围栏代码、非分隔线**的正文；全是标题时才退回标题文字。
+ */
+function deriveDescription(text) {
+  const lines = String(text ?? '').split(/\r?\n/)
+  const fenced = fenceMask(lines)
+  const prose = lines.filter((raw, index) => {
+    const line = raw.trim()
+    if (fenced[index] || line === '') return false
+    return !/^#{1,6}(?:\s|$)/.test(line) && !/^(?:[-*_]\s*){3,}$/.test(line)
+  })
+  return firstLine(prose.join('\n')) || firstLine(text)
+}
+
+/** 读一条记忆（含 frontmatter）。文件不存在、或 id 不安全（会逃出记忆目录）返回 undefined。 */
 function readMemory(memoryDir, id) {
-  const file = path.join(memoriesPath(memoryDir), `${id}.md`)
-  if (!existsSync(file)) return undefined
+  const file = idFile(memoriesPath(memoryDir), id)
+  if (!file || !existsSync(file)) return undefined
   const raw = readFileSync(file, 'utf8')
   const { data, body } = parseFrontmatter(raw)
   return { id, file, meta: data, body: body.trim(), raw }
@@ -684,9 +912,20 @@ const memoryCache = new Map()
  */
 export function listMemories(memoryDir) {
   const dir = memoriesPath(memoryDir)
-  if (!existsSync(dir)) return []
-  const out = []
+  // 缓存键是 path.join(dir, 文件名)，所以「这个目录的条目」就是 dirname 等于它的那些
+  const dirKey = path.dirname(path.join(dir, 'x'))
   const alive = new Set()
+  const evictGone = () => {
+    // 只回收**本目录**里已不存在的文件：多个项目库交替查询时，不能互相把对方的缓存清掉
+    for (const key of memoryCache.keys()) {
+      if (path.dirname(key) === dirKey && !alive.has(key)) memoryCache.delete(key)
+    }
+  }
+  if (!existsSync(dir)) {
+    evictGone()
+    return []
+  }
+  const out = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue
     // 记忆文件和 MEMORY.md 同级，索引文件自己不是一条记忆
@@ -720,9 +959,7 @@ export function listMemories(memoryDir) {
     }
   }
   // 回收已不存在文件的缓存，避免长期驻留
-  for (const key of memoryCache.keys()) {
-    if (!alive.has(key)) memoryCache.delete(key)
-  }
+  evictGone()
   return out.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
 }
 
@@ -732,10 +969,15 @@ export function listMemories(memoryDir) {
  * 文件名 = 由标题派生的 slug（与 Claude Code 一致），所以：
  *   · 新建时按标题生成；
  *   · **改标题会同步重命名文件** —— 否则索引指向旧名、文件名和内容对不上；
- *   · 撞名时自动加 `-2` / `-3`，绝不覆盖别人的记忆。
+ *   · 撞名时自动加 `-2` / `-3`（不分大小写），绝不覆盖别人的记忆。
+ *
+ * 显式给的 `id` 不安全（含路径分隔符等，见 isSafeId）时**抛错**，不写任何文件。
  */
 export function writeMemory(memoryDir, input) {
-  const existing = input.id ? readMemory(memoryDir, input.id) : undefined
+  if (input.id && !isSafeId(String(input.id))) {
+    throw new Error(`不安全的记忆 id：${JSON.stringify(String(input.id).slice(0, 80))}`)
+  }
+  const existing = input.id ? readMemory(memoryDir, String(input.id)) : undefined
   // 没传 type 时必须沿用原值，不能一律回落成 project——
   // 否则「只改摘要」这类局部更新会静默把分类冲掉。
   const type = MEMORY_TYPES.includes(input.type)
@@ -746,8 +988,7 @@ export function writeMemory(memoryDir, input) {
   const now = new Date().toISOString()
 
   const body = input.body ?? existing?.body ?? input.title ?? ''
-  const title =
-    String(input.title ?? existing?.meta?.title ?? '').trim() || firstLine(body) || existing?.id || 'memory'
+  const title = oneLine(input.title ?? existing?.meta?.title ?? '') || firstLine(body) || existing?.id || 'memory'
 
   // 文件名 = 英文 slug。规则：
   //   · 显式给 slug 且与当前不同 → 重命名（标题变化本身不再触发重命名，
@@ -760,7 +1001,8 @@ export function writeMemory(memoryDir, input) {
   let id = existing?.id ?? (input.id ? String(input.id) : '')
   if (!id) {
     id = uniqueSlug(memoryDir, requestedSlug || slugify(title), null)
-  } else if (requestedSlug && requestedSlug !== id) {
+  } else if (requestedSlug && requestedSlug.toLowerCase() !== id.toLowerCase()) {
+    // 只差大小写不算改名：在不分大小写的文件系统上那是同一个文件，改名后删旧文件会把新文件一起删掉
     id = uniqueSlug(memoryDir, requestedSlug, id)
   }
 
@@ -772,14 +1014,17 @@ export function writeMemory(memoryDir, input) {
   const bodyChanged = !existing || nextBody.trim() !== String(existing.body ?? '').trim()
   let description
   if (input.description !== undefined) {
-    description = String(input.description).trim()
+    description = oneLine(input.description)
   } else if (existing && !bodyChanged) {
-    description = String(existing.meta.description ?? '').trim() || firstLine(nextBody) || title
+    description = oneLine(existing.meta.description) || deriveDescription(nextBody) || title
   } else {
-    description = firstLine(nextBody) || String(existing?.meta?.description ?? '').trim() || title
+    description = deriveDescription(nextBody) || oneLine(existing?.meta?.description) || title
   }
 
   const meta = {
+    // 先铺上原有的全部键：hits / lastHit 与任何未知键（手写的、别的工具加的）更新时必须原样保留，
+    // 下面显式列出的键再覆盖它们。
+    ...existing?.meta,
     name: id,
     description,
     // scope 只是提示（提示该不该挪去全局的 AGENTS.md），不影响存放位置
@@ -797,7 +1042,8 @@ export function writeMemory(memoryDir, input) {
   }
 
   ensureDir(memoriesPath(memoryDir))
-  const file = path.join(memoriesPath(memoryDir), `${id}.md`)
+  const file = idFile(memoriesPath(memoryDir), id)
+  if (!file) throw new Error(`不安全的记忆 id：${JSON.stringify(id.slice(0, 80))}`)
   const nextRaw = serializeFrontmatter(meta, body)
   // 只有「实质内容」变了才留档。
   // modified / hits / lastHit 每次写入都会变，直接比原文等于永远算"变了"，
@@ -810,7 +1056,7 @@ export function writeMemory(memoryDir, input) {
   if (existing?.raw && stableOf(existing.raw) !== stableOf(nextRaw)) {
     archiveVersion(memoryDir, existing.id, existing.raw)
   }
-  writeFileSync(file, nextRaw, 'utf8')
+  writeFileAtomic(file, nextRaw)
 
   // 重命名后必须删掉旧文件，否则同一条记忆会留下两份
   if (existing && existing.file !== file) {
@@ -826,10 +1072,10 @@ export function writeMemory(memoryDir, input) {
   return file
 }
 
-/** 删一条记忆。返回是否真的删掉了。 */
+/** 删一条记忆。返回是否真的删掉了；id 不安全（会逃出记忆目录）一律返回 false，不碰任何文件。 */
 export function deleteMemory(memoryDir, id) {
-  const file = path.join(memoriesPath(memoryDir), `${id}.md`)
-  if (!existsSync(file)) return false
+  const file = idFile(memoriesPath(memoryDir), id)
+  if (!file || !existsSync(file)) return false
   // 删除同样留档——取代/清理都可能是误操作
   const current = readMemory(memoryDir, id)
   if (current?.raw) archiveVersion(memoryDir, id, current.raw)
@@ -870,35 +1116,46 @@ export function listPending(memoryDir) {
   return out.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
 }
 
-/** 写一条待确认记忆。返回落盘路径。 */
+/** `<pending>/<id>.md`；id 不安全或会逃出 pending 目录时返回 null。 */
+const pendingFile = (memoryDir, id) => idFile(pendingPath(memoryDir), id)
+
+/**
+ * 写一条待确认记忆。返回落盘路径。
+ *
+ * 默认 id 带随机后缀：同一批抽取的几条候选在同一毫秒内连续落盘，
+ * 只用时间戳会互相覆盖（`queued` 报 3 条，实际只剩 1 个文件）。
+ * `supersedes`：这条草稿被收下时要取代的已有记忆 id，由 acceptPending 执行。
+ */
 export function writePending(memoryDir, input) {
   const type = MEMORY_TYPES.includes(input.type) ? input.type : 'project'
-  const id = input.id ?? `dr_${Date.now().toString(36)}`
+  const id = input.id ?? `dr_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`
   const now = new Date().toISOString()
-  const file = path.join(pendingPath(memoryDir), `${id}.md`)
+  const file = pendingFile(memoryDir, id)
+  if (!file) throw new Error(`不安全的草稿 id：${JSON.stringify(String(id).slice(0, 80))}`)
+  const supersedes = typeof input.supersedes === 'string' ? input.supersedes.trim() : ''
   ensureDir(pendingPath(memoryDir))
-  writeFileSync(
+  writeFileAtomic(
     file,
     serializeFrontmatter(
       {
         id,
         // 草稿阶段就记下英文 slug 与摘要，accept 时直接沿用
         slug: input.slug ? asciiSlug(input.slug) : undefined,
-        description: input.description,
+        description: input.description == null ? undefined : oneLine(input.description),
         scope: input.scope === 'global' ? 'global' : 'project',
         type,
         status: 'draft',
         tags: input.tags ?? [],
         // paths 也要带上：accept 后写库时一并沿用，否则路径触发信息会丢
         paths: Array.isArray(input.paths) ? input.paths : [],
+        supersedes: supersedes || undefined,
         created: now,
         modified: now,
         confidence: input.confidence ?? '0.6',
-        title: input.title,
+        title: input.title == null ? undefined : oneLine(input.title),
       },
       input.body ?? '',
     ),
-    'utf8',
   )
   return file
 }
@@ -926,7 +1183,8 @@ function pruneEmptyState(memoryDir) {
 
 /** 收下一条待确认记忆：搬进正式库（文件名用 slug）并重建索引与向量。 */
 export async function acceptPending(memoryDir, id) {
-  const file = path.join(pendingPath(memoryDir), `${id}.md`)
+  const file = pendingFile(memoryDir, id)
+  if (!file) return { ok: false, reason: 'invalid-id', error: `不合法的草稿 id：${JSON.stringify(String(id).slice(0, 80))}` }
   if (!existsSync(file)) return { ok: false, error: `待确认队列里没有 ${id}` }
   try {
     const { data, body } = parseFrontmatter(readFileSync(file, 'utf8'))
@@ -942,8 +1200,28 @@ export async function acceptPending(memoryDir, id) {
       return { ok: true, agents: upserted, action: upserted.action, path: upserted.path }
     }
 
-    // 不传 id：正式库的文件名要用数据里的英文 slug，而不是草稿的 dr_xxx
+    // 草稿声明了要取代的旧记忆：目标还在才算「取代」（不占新名额、写完要把旧的归档删掉）
+    const target = typeof data.supersedes === 'string' ? readMemory(memoryDir, data.supersedes.trim()) : undefined
+
+    // 条数硬限与 memory_remember 一致：满了就拒收，草稿留在队列里。取代不增加条数，不拦。
+    if (!target && CONFIG.maxMemoryCount > 0) {
+      const count = listMemories(memoryDir).length
+      if (count >= CONFIG.maxMemoryCount) {
+        return {
+          ok: false,
+          reason: 'library-full',
+          error: `记忆库已有 ${count} 条，达到 ${CONFIG.maxMemoryCount} 条上限；先合并或删除一条再收下（草稿仍在队列里）`,
+          count,
+          limit: CONFIG.maxMemoryCount,
+        }
+      }
+    }
+
+    // 新旧 slug 相同就原地更新（保留 created / hits，历史里留旧版）；
+    // 否则不传 id——正式库的文件名要用数据里的英文 slug，而不是草稿的 dr_xxx
+    const inPlace = target && typeof data.slug === 'string' && asciiSlug(data.slug) === target.id
     const saved = writeMemory(memoryDir, {
+      ...(inPlace ? { id: target.id } : {}),
       slug: data.slug,
       title: data.title ?? id,
       description: data.description,
@@ -954,11 +1232,21 @@ export async function acceptPending(memoryDir, id) {
       paths: Array.isArray(data.paths) ? data.paths : [],
       confidence: data.confidence,
       status: 'confirmed',
+      ...(target && !inPlace ? { supersedes: target.id } : {}),
     })
+    // 取代：新条落盘成功之后才删旧的（deleteMemory 先归档，可回退）
+    const savedId = path.basename(saved, '.md')
+    const replaced = target && savedId !== target.id && deleteMemory(memoryDir, target.id) ? target.id : ''
     rmSync(file, { force: true })
     pruneEmptyState(memoryDir)
     const built = await rebuildVectors(memoryDir)
-    return { ok: true, file: path.relative(memoryDir, saved), vectorMode: built.mode, vectorCount: built.indexed }
+    return {
+      ok: true,
+      file: path.relative(memoryDir, saved),
+      ...(replaced ? { replaced } : {}),
+      vectorMode: built.mode,
+      vectorCount: built.indexed,
+    }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }
@@ -966,7 +1254,8 @@ export async function acceptPending(memoryDir, id) {
 
 /** 丢弃一条待确认记忆。 */
 export function rejectPending(memoryDir, id) {
-  const file = path.join(pendingPath(memoryDir), `${id}.md`)
+  const file = pendingFile(memoryDir, id)
+  if (!file) return { ok: false, reason: 'invalid-id', error: `不合法的草稿 id：${JSON.stringify(String(id).slice(0, 80))}` }
   if (!existsSync(file)) return { ok: false, error: `待确认队列里没有 ${id}` }
   try {
     rmSync(file, { force: true })
@@ -1013,20 +1302,43 @@ function recentTranscript(session, maxChars = 6000) {
   return joined.length > maxChars ? joined.slice(-maxChars) : joined
 }
 
-/** 从模型输出里抠出 JSON 数组，容忍 ```json 围栏和前后闲聊。 */
+/**
+ * 从模型输出里抠出 JSON 数组，容忍 ```json 围栏和前后闲聊。
+ *
+ * 逐个尝试候选串，第一个能解析成「含合法条目的数组」的胜出：
+ *   1. 整段文本；
+ *   2. 整段被围栏包住时，围栏**内**的内容（取到最后一个 ```，所以正文里的 ``` 不会截断它）；
+ *   3. 从每一个 `[` 起、到最后一个 `]` 止（前后有闲聊、闲聊里还带着 `[2]` 之类的方括号）。
+ * 不用「第一个 ``` 对」去切——条目的 body 本来就是 Markdown，里面常有代码围栏。
+ * 回复被 maxTokens 截断时没有任何候选能解析，返回 []（不猜、不补全）。
+ */
 export function parseExtractionJson(text) {
   // 模型输出/上游异常什么都可能传进来，先兜住非字符串
-  const source = typeof text === 'string' ? text : ''
+  const source = typeof text === 'string' ? text.trim() : ''
   if (!source) return []
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(source)
-  const candidate = (fenced ? fenced[1] : source).trim()
-  const start = candidate.indexOf('[')
-  const end = candidate.lastIndexOf(']')
-  if (start < 0 || end <= start) return []
-  try {
-    const parsed = JSON.parse(candidate.slice(start, end + 1))
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter(
+
+  const candidates = [source]
+  if (source.startsWith('```')) {
+    const opening = /^```[^\n]*\n/.exec(source)
+    const lastFence = source.lastIndexOf('```')
+    if (opening && lastFence >= opening[0].length) candidates.push(source.slice(opening[0].length, lastFence))
+  }
+  const last = source.lastIndexOf(']')
+  let attempts = 0
+  for (let start = source.indexOf('['); start >= 0 && start < last && attempts < 64; attempts += 1) {
+    candidates.push(source.slice(start, last + 1))
+    start = source.indexOf('[', start + 1)
+  }
+
+  for (const candidate of candidates) {
+    let parsed
+    try {
+      parsed = JSON.parse(candidate)
+    } catch {
+      continue
+    }
+    if (!Array.isArray(parsed)) continue
+    const valid = parsed.filter(
       (item) =>
         item &&
         typeof item === 'object' &&
@@ -1035,10 +1347,13 @@ export function parseExtractionJson(text) {
         typeof item.body === 'string' &&
         item.body.trim(),
     )
-  } catch {
-    return []
+    if (valid.length > 0) return valid
   }
+  return []
 }
+
+/** 抽取一次的墙钟上限：流卡住时回合收尾最多被拖这么久。 */
+const EXTRACT_TIMEOUT_MS = 60_000
 
 export const EXTRACTION_SYSTEM = [
   'You extract durable memories from a conversation for a coding agent.',
@@ -1089,7 +1404,10 @@ export async function extractFromTurn(ctx, agent, memoryDir, options = {}) {
     const model = route?.model
     if (!provider || !model) return { skipped: 'no routed model' }
 
+    // 抽取挂在 turn-stopping（serial，会被 await）上：模型卡住不返回，回合就收不了尾。
+    // 所以流循环有墙钟上限，到点就 abort 并停止迭代，用已收到的部分继续。
     let text = ''
+    const controller = new AbortController()
     const stream = llm.stream({
       provider,
       model,
@@ -1097,13 +1415,38 @@ export async function extractFromTurn(ctx, agent, memoryDir, options = {}) {
       messages: [{ role: 'user', content: [{ type: 'text', text: `对话记录：\n\n${transcript}` }] }],
       maxTokens: 1200,
       temperature: 0,
+      signal: controller.signal,
     })
-    for await (const chunk of stream) {
-      if (chunk?.type === 'text-delta') text += chunk.text
+    const iterator = (stream[Symbol.asyncIterator] ?? stream[Symbol.iterator]).call(stream)
+    const TIMED_OUT = Symbol('timed-out')
+    let timer
+    const deadline = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        resolve(TIMED_OUT)
+      }, options.timeoutMs ?? EXTRACT_TIMEOUT_MS)
+    })
+    let timedOut = false
+    try {
+      for (;;) {
+        const step = await Promise.race([iterator.next(), deadline])
+        if (step === TIMED_OUT) {
+          timedOut = true
+          break
+        }
+        if (step.done) break
+        if (step.value?.type === 'text-delta') text += step.value.text
+      }
+    } finally {
+      clearTimeout(timer)
+      // 不 await：卡住的生成器可能永远不回应 return()
+      if (timedOut) Promise.resolve(iterator.return?.()).catch(() => {})
     }
 
     const candidates = parseExtractionJson(text).slice(0, CONFIG.extractMaxPerTurn)
-    if (candidates.length === 0) return { skipped: 'nothing worth remembering', raw: text.slice(0, 200) }
+    if (candidates.length === 0) {
+      return { skipped: timedOut ? 'extraction timed out' : 'nothing worth remembering', raw: text.slice(0, 200) }
+    }
 
     // 去重：与「已确认记忆的向量 + 尚未处置的 pending 条目」一起比。
     // 只比 confirmed 会漏掉一种情况——同一段对话连续两回合抽出同一条，
@@ -1191,7 +1534,12 @@ export function rememberRoute(confidence) {
 
 const agentsFilePath = () => CONFIG.agentsFile || path.join(os.homedir(), '.dsh', 'AGENTS.md')
 
-const escapeRegExp = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** 章标题去掉开头的编号（`3. xxx` → `xxx`），用来跨编号比较标题。 */
+const stripChapterNumber = (title) => String(title ?? '').replace(/^\d+\.\s*/, '').trim()
+
+/** 文件的换行风格：CRLF 行多于 LF 行就写回 CRLF，别把用户的 CRLF 文件悄悄改成 LF。 */
+const detectEol = (text) =>
+  (text.match(/\r\n/g) ?? []).length > (text.match(/(?<!\r)\n/g) ?? []).length ? '\r\n' : '\n'
 
 /** 读 AGENTS.md 概况（给界面显示用）。 */
 export function agentsStatus() {
@@ -1203,7 +1551,7 @@ export function agentsStatus() {
       path: file,
       exists: true,
       bytes: Buffer.byteLength(text, 'utf8'),
-      sections: (text.match(/^##\s+/gm) ?? []).length,
+      sections: parseAgentsSections(text).blocks.length,
     }
   } catch {
     return { path: file, exists: false, bytes: 0, sections: 0 }
@@ -1211,13 +1559,13 @@ export function agentsStatus() {
 }
 
 /**
- * 算下一节的编号。
+ * 算下一章的编号：已有 `## N.` 编号的最大值 + 1（写入时 renumberAgentsLines 会再统一重排）。
  *
  * AGENTS.md 的既有约定是 `## N. 标题` + `### N.M 子标题`（连续编号）。
- * promote 必须跟着编号，否则每写入一次就把文件的统一格式破坏一次。
+ * 追加必须跟着编号，否则每写入一次就把文件的统一格式破坏一次。
  */
-function nextAgentsSectionNumber(text) {
-  const numbers = [...String(text).matchAll(/^##\s+(\d+)\.\s/gm)].map((match) => Number(match[1]))
+function nextChapterNumber(blocks) {
+  const numbers = blocks.map((block) => /^(\d+)\./.exec(block.title)).filter(Boolean).map((match) => Number(match[1]))
   return numbers.length > 0 ? Math.max(...numbers) + 1 : 1
 }
 
@@ -1231,39 +1579,66 @@ function nextAgentsSectionNumber(text) {
  *
  * 所以：正文标题整体下沉到 `###` 及以下，剥掉尾部出身说明，压平多余空行。
  * `sectionNumber` 用来给子标题排 `N.M` 编号，保持与文件既有格式一致。
+ *
+ * 围栏代码块（``` / ~~~）里的行一律原样保留：代码里的 `# 注释` 不是标题，
+ * 不能被下沉、编号，里面的空行也不能被压。
+ *
+ * `forSave`：保存**已有**章节（面板编辑 / 按章号更新）。此时正文多半已经是规范格式，
+ * 整体再下沉一级会让每次保存都把 `###` 压成 `####`，所以只把 `#` / `##` 压到 `###`
+ * （保证正文里不会冒出新的章或文档标题），其余标题原样保留；不剥「出身说明」，也不编号。
  */
-function formatAgentsBody(body, sectionNumber) {
-  let text = String(body ?? '').replace(/\r\n?/g, '\n').trim()
+function formatAgentsBody(body, sectionNumber, { forSave = false } = {}) {
+  let lines = String(body ?? '').replace(/\r\n?/g, '\n').trim().split('\n')
 
   // 尾部「--- + 迁移/来源说明」属于条目自己的出身，不该混进全局准则
-  const marker = text.lastIndexOf('\n---')
-  if (marker >= 0 && /(迁移自|来源[:：]|origin\s*[:：])/i.test(text.slice(marker))) {
-    text = text.slice(0, marker).trim()
+  if (!forSave) {
+    const fenced = fenceMask(lines)
+    let marker = -1
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (!fenced[i] && /^-{3,}\s*$/.test(lines[i])) {
+        marker = i
+        break
+      }
+    }
+    if (marker >= 0 && /(迁移自|来源[:：]|origin\s*[:：])/i.test(lines.slice(marker).join('\n'))) {
+      lines = lines.slice(0, marker)
+    }
   }
 
-  // 标题整体下沉：`#`→`###`、`##`→`###`、`###`→`####`，永远落在外层 `##` 之下
-  text = text.replace(/^(#{1,6})(\s+)/gm, (_, hashes, space) => {
-    const level = Math.min(6, Math.max(3, hashes.length + 1))
-    return `${'#'.repeat(level)}${space}`
+  // 标题整体下沉：`#`→`###`、`##`→`###`、`###`→`####`，永远落在外层 `##` 之下；
+  // 三级标题按出现顺序编号为 N.1 / N.2 …（与文件既有约定一致）
+  const fenced = fenceMask(lines)
+  let index = 0
+  lines = lines.map((line, i) => {
+    if (fenced[i]) return line
+    const heading = /^(#{1,6})(\s+)(.*)$/.exec(line)
+    if (!heading) return line
+    const level = forSave ? Math.max(3, heading[1].length) : Math.min(6, Math.max(3, heading[1].length + 1))
+    if (!forSave && sectionNumber && level === 3 && heading[3] !== '') {
+      index += 1
+      return `### ${sectionNumber}.${index} ${heading[3]}`
+    }
+    return `${'#'.repeat(level)}${heading[2]}${heading[3]}`
   })
 
-  // 三级标题按出现顺序编号为 N.1 / N.2 …（与文件既有约定一致）
-  if (sectionNumber) {
-    let index = 0
-    text = text.replace(/^###\s+(.+)$/gm, (_, heading) => `### ${sectionNumber}.${(index += 1)} ${heading}`)
-  }
-
-  return text.replace(/\n{3,}/g, '\n\n').trim()
+  const out = []
+  lines.forEach((line, i) => {
+    if (!fenced[i] && line === '' && out[out.length - 1] === '') return
+    out.push(line)
+  })
+  return out.join('\n').trim()
 }
 
 /**
  * 把一条记忆搬进全局 AGENTS.md：追加一节 `## 标题` + 正文，然后从项目库删除。
  *
- * 这是插件里**唯一**会写用户手写文件的地方，所以四道保护：
- *   1. 标题已存在就拒绝，绝不重复追加
- *   2. 只追加，不改写任何已有内容
- *   3. 删记忆走 deleteMemory，历史里留一份，可回退
- *   4. 只有 scope=global 的记忆才允许搬（避免把项目内知识污染成全局规则）
+ * 这是插件里**唯一**会写用户手写文件的地方（连同下面的章节读写），所以保护都走
+ * appendAgentsSection：
+ *   1. 标题已存在（不论带不带编号）就拒绝，绝不重复追加
+ *   2. 只追加，不改写已有章节
+ *   3. 字节预算 maxAgentsBytes 与写前留档同样适用
+ *   4. 删记忆走 deleteMemory，历史里留一份，可回退
+ *   5. 只有 scope=global 的记忆才允许搬（避免把项目内知识污染成全局规则）
  */
 export function promoteToAgents(memoryDir, id) {
   const item = readMemory(memoryDir, id)
@@ -1278,40 +1653,48 @@ export function promoteToAgents(memoryDir, id) {
 
   const title = String(item.meta.title ?? id).trim()
   if (!title) return { ok: false, reason: 'empty-title', id }
+  if (!item.body) return { ok: false, reason: 'empty-body', title, agentsPath: file }
 
-  let current
+  let before
   try {
-    current = readFileSync(file, 'utf8')
+    before = Buffer.byteLength(readFileSync(file, 'utf8'), 'utf8')
   } catch (error) {
     return { ok: false, reason: 'read-failed', agentsPath: file, error: String(error?.message ?? error) }
   }
 
-  if (new RegExp(`^##\\s+${escapeRegExp(title)}\\s*$`, 'm').test(current)) {
-    return { ok: false, reason: 'already-present', title, agentsPath: file }
-  }
-
-  const sectionNumber = nextAgentsSectionNumber(current)
-  const body = formatAgentsBody(item.body, sectionNumber)
-  if (!body) return { ok: false, reason: 'empty-body', title, agentsPath: file }
   // 来源注释：promote 后记忆从项目库删除，这里留一条不可见线索（HTML 注释渲染时看不到），
   // 便于日后追溯这一节来自哪条记忆。日期只取到天，避免同一内容反复写入产生差异。
   const stamp = new Date().toISOString().slice(0, 10)
-  const addition = `\n## ${sectionNumber}. ${title}\n\n${body}\n\n<!-- 来自记忆 ${id}，写入于 ${stamp} -->\n`
+  let added
   try {
-    const next = `${current.replace(/\s*$/, '\n')}${addition}`
-    writeFileSync(file, next, 'utf8')
-    // 搬走后从项目库删除；deleteMemory 会先留历史
-    deleteMemory(memoryDir, id)
-    return {
-      ok: true,
-      title,
-      agentsPath: file,
-      addedBytes: Buffer.byteLength(addition, 'utf8'),
-      totalBytes: Buffer.byteLength(next, 'utf8'),
-      memoryRemoved: true,
-    }
+    added = appendAgentsSection({ title, body: item.body, note: `来自记忆 ${id}，写入于 ${stamp}` })
   } catch (error) {
     return { ok: false, reason: 'write-failed', agentsPath: file, error: String(error?.message ?? error) }
+  }
+  if (!added.ok) {
+    return {
+      ok: false,
+      reason: added.reason,
+      title,
+      agentsPath: file,
+      ...(added.reason === 'agents-full' ? { bytes: added.bytes, limit: added.limit, current: added.current } : {}),
+    }
+  }
+
+  // 搬走后从项目库删除；deleteMemory 会先留历史。AGENTS.md 已经写成功，删不掉不该报整体失败。
+  let memoryRemoved = false
+  try {
+    memoryRemoved = deleteMemory(memoryDir, id)
+  } catch {
+    // 记忆还在项目库里：重复但不丢
+  }
+  return {
+    ok: true,
+    title,
+    agentsPath: file,
+    addedBytes: added.bytes - before,
+    totalBytes: added.bytes,
+    memoryRemoved,
   }
 }
 
@@ -1329,10 +1712,12 @@ export function promoteToAgents(memoryDir, id) {
  */
 export function parseAgentsSections(text) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n')
+  const fenced = fenceMask(lines)
   const blocks = []
   let preambleEnd = lines.length
 
   for (let i = 0; i < lines.length; i += 1) {
+    if (fenced[i]) continue // 围栏代码里的 `## ` 是代码，不是章
     const matched = /^(#{1,6})\s+(.+)$/.exec(lines[i])
     if (!matched) continue
     if (matched[1].length !== 2) continue // `#` 标题与 `###` 以下都不单独成块
@@ -1351,19 +1736,23 @@ export function parseAgentsSections(text) {
  * 重排编号，让文件保持 `## N.` + `### N.M` 的连续约定。
  *
  * 删除或新增一章后必须调用，否则编号会出现断号，跟你要求的统一格式不符。
- * 只重写标题行，正文一个字不动。
+ * 只重写标题行，正文一个字不动；围栏代码块里的行完全跳过。
+ * 只认既有的编号前缀（`## N.` 与 `### N.M`）：`### 5 Whys`、`### 2024 roadmap`
+ * 的开头数字是标题内容，不是编号。
  */
 export function renumberAgentsLines(lines) {
+  const fenced = fenceMask(lines)
   let chapter = 0
   let section = 0
-  return lines.map((line) => {
+  return lines.map((line, i) => {
+    if (fenced[i]) return line
     const heading2 = /^##\s+\d+\.\s+(.*)$/.exec(line)
     if (heading2) {
       chapter += 1
       section = 0
       return `## ${chapter}. ${heading2[1]}`
     }
-    const heading3 = /^###\s+\d+(?:\.\d+)?\s+(.*)$/.exec(line)
+    const heading3 = /^###\s+\d+\.\d+\s+(.*)$/.exec(line)
     if (heading3) {
       section += 1
       return `### ${chapter}.${section} ${heading3[1]}`
@@ -1431,33 +1820,53 @@ export function readAgentsDocument() {
   }
 }
 
-/** 用新的块数组写回文件（重排编号后落盘，写前留档）。 */
-function writeAgentsDocument(file, original, parsed, blocks) {
-  const lines = []
-  for (const block of blocks) lines.push(...block.lines)
-
-  // 章与章之间必须有空行：块的边界是「下一章标题的位置」，本身不含分隔空行，
-  // 直接拼接会把上一章最后一行和 `## 下一章` 粘在一起（Markdown 里标题会失效）。
-  const spaced = []
-  for (const line of [...parsed.preamble, ...lines]) {
-    if (/^#{2,3}\s/.test(line) && spaced.length > 0 && spaced[spaced.length - 1].trim() !== '') {
-      spaced.push('')
+/**
+ * 整理一章（新写入或改过的）的行：`##` / `###` 标题前补空行，连续空行压成一行。
+ * 围栏代码块里的内容原样保留——里面的空行和 `## ` 都是代码的一部分。
+ */
+function tidyChapterLines(lines) {
+  const fenced = fenceMask(lines)
+  const out = []
+  lines.forEach((line, i) => {
+    if (!fenced[i]) {
+      if (line === '' && out[out.length - 1] === '') return
+      if (/^#{2,3}\s/.test(line) && out.length > 0 && out[out.length - 1].trim() !== '') out.push('')
     }
-    spaced.push(line)
+    out.push(line)
+  })
+  return out
+}
+
+/**
+ * 用新的块数组写回文件（重排编号后原子落盘，写前留档）。
+ *
+ * 只有 `touched` 的块（改过 / 新增）会被整理空行；没碰过的章逐字保留。
+ * 换行风格沿用原文件（CRLF 仍是 CRLF）。
+ */
+function writeAgentsDocument(file, original, parsed, blocks) {
+  const lines = [...parsed.preamble]
+  for (const block of blocks) {
+    // 章与章之间必须有空行：改过的块不含分隔空行，直接拼接会把上一章最后一行
+    // 和 `## 下一章` 粘在一起（Markdown 里标题会失效）。
+    if (lines.length > 0 && lines[lines.length - 1].trim() !== '') lines.push('')
+    lines.push(...(block.touched ? tidyChapterLines(block.lines) : block.lines))
   }
 
-  const merged = spaced.join('\n').replace(/\n{3,}/g, '\n\n')
-  const finalText = `${renumberAgentsLines(merged.split('\n')).join('\n').replace(/\s*$/, '')}\n`
+  const eol = detectEol(original)
+  const finalText = `${renumberAgentsLines(lines).join(eol).trimEnd()}${eol}`
   const size = Buffer.byteLength(finalText, 'utf8')
+  const current = Buffer.byteLength(original, 'utf8')
 
   // 字节预算：AGENTS.md 每轮注入，不是免费存储。超了就不写，让调用方先合并或删。
+  // 但文件本来就超限时，缩小的写入（删一章、改短一章）必须放行——
+  // 否则「先删再合并」这条出路本身被预算堵死，只能一次删到线下。
   const limit = CONFIG.maxAgentsBytes
-  if (limit > 0 && size > limit) {
-    return { ok: false, reason: 'agents-full', bytes: size, limit, current: Buffer.byteLength(original, 'utf8') }
+  if (limit > 0 && size > limit && size > current) {
+    return { ok: false, reason: 'agents-full', bytes: size, limit, current }
   }
 
   backupAgentsFile(file, original)
-  writeFileSync(file, finalText, 'utf8')
+  writeFileAtomic(file, finalText)
   return { ok: true, bytes: size }
 }
 
@@ -1469,7 +1878,25 @@ function agentsBlocks(parsed) {
   }))
 }
 
-/** 保存某一章：标题 + 正文整体替换，其余章节逐字保留。 */
+/**
+ * 按序号取目标章并校验。章序号是「读文件时的位置」，面板里的序号可能已经过期
+ * （另一处刚增删过章）——传了 `expectedTitle` 就核对标题，对不上返回 section-moved，
+ * 而不是静默改写/删掉另一章。
+ */
+function pickAgentsBlock(blocks, index, expectedTitle) {
+  if (!Number.isInteger(index) || index < 0) return { error: { ok: false, reason: 'invalid-index' } }
+  const target = blocks[index]
+  if (!target) return { error: { ok: false, reason: 'section-not-found', index } }
+  if (typeof expectedTitle === 'string' && stripChapterNumber(expectedTitle) !== stripChapterNumber(target.title)) {
+    return { error: { ok: false, reason: 'section-moved', index, actualTitle: stripChapterNumber(target.title) } }
+  }
+  return { target }
+}
+
+/**
+ * 保存某一章：标题 + 正文整体替换，其余章节逐字保留。
+ * `input.expectedTitle`：面板打开这一章时看到的标题，用来发现序号已过期（见 pickAgentsBlock）。
+ */
 export function saveAgentsSection(index, input) {
   const file = agentsFilePath()
   if (!existsSync(file)) return { ok: false, reason: 'agents-missing', path: file }
@@ -1477,69 +1904,86 @@ export function saveAgentsSection(index, input) {
   const original = readFileSync(file, 'utf8')
   const parsed = parseAgentsSections(original)
   const blocks = agentsBlocks(parsed)
-  const target = blocks[Number(index)]
-  if (!target) return { ok: false, reason: 'section-not-found', index }
-
-  const title = String(input?.title ?? '').trim()
-  if (!title) return { ok: false, reason: 'empty-title' }
+  const picked = pickAgentsBlock(blocks, index, input?.expectedTitle)
+  if (picked.error) return picked.error
+  const target = picked.target
 
   // 标题里可能带着旧编号（`## 3. xxx`）；剥掉，交给 renumberAgentsLines 统一分配，
   // 否则保存后这一章会因为「不匹配 ^## N.」而丢掉编号。
-  const bareTitle = title.replace(/^\d+(?:\.\d+)?\.\s*/, '')
+  const bareTitle = oneLine(input?.title).replace(/^\d+(?:\.\d+)?\.\s*/, '')
+  if (!bareTitle) return { ok: false, reason: 'empty-title' }
+
   const hashes = '#'.repeat(target.level)
-  const body = String(input?.body ?? '').replace(/\r\n?/g, '\n').trim()
+  // 正文里的 `#` / `##` 压到 `###`：它们不能在保存后变成新的章
+  const body = formatAgentsBody(input?.body, 0, { forSave: true })
   target.lines = [`${hashes} 0. ${bareTitle}`, '', ...(body ? body.split('\n') : [])]
+  target.touched = true
 
   const written = writeAgentsDocument(file, original, parsed, blocks)
   if (!written.ok) return written
   return { ok: true, path: file, bytes: written.bytes, index }
 }
 
-/** 删除某一章（连同它下面的子标题）。 */
-export function deleteAgentsSection(index) {
+/**
+ * 删除某一章（连同它下面的子标题）。
+ * `options.expectedTitle`：同 saveAgentsSection，序号过期就拒绝，不删错章。
+ */
+export function deleteAgentsSection(index, options) {
   const file = agentsFilePath()
   if (!existsSync(file)) return { ok: false, reason: 'agents-missing', path: file }
 
   const original = readFileSync(file, 'utf8')
   const parsed = parseAgentsSections(original)
   const blocks = agentsBlocks(parsed)
-  const target = blocks[Number(index)]
-  if (!target) return { ok: false, reason: 'section-not-found', index }
+  const picked = pickAgentsBlock(blocks, index, options?.expectedTitle)
+  if (picked.error) return picked.error
+  const target = picked.target
   if (target.level !== 2) return { ok: false, reason: 'only-chapter', index }
 
-  blocks.splice(Number(index), 1)
+  blocks.splice(index, 1)
   const written = writeAgentsDocument(file, original, parsed, blocks)
   if (!written.ok) return written
   return { ok: true, path: file, bytes: written.bytes, removed: target.title }
 }
 
-/** 追加一章：编号自动顺延，正文按 promote 的规则下沉标题。 */
+/**
+ * 追加一章：编号自动顺延，正文按 promote 的规则下沉标题。
+ * `input.note`：写在章末的 HTML 注释（渲染时不可见），promote 用它记录「来自哪条记忆」。
+ */
 export function appendAgentsSection(input) {
   const file = agentsFilePath()
   if (!existsSync(file)) return { ok: false, reason: 'agents-missing', path: file }
 
-  const title = String(input?.title ?? '').trim()
-  if (!title) return { ok: false, reason: 'empty-title' }
+  const title = oneLine(input?.title)
+  // 标题若自带旧编号，剥掉后由 renumberAgentsLines 统一分配
+  const bareTitle = title.replace(/^\d+(?:\.\d+)?\.\s*/, '')
+  if (!bareTitle) return { ok: false, reason: 'empty-title' }
 
   const original = readFileSync(file, 'utf8')
   const parsed = parseAgentsSections(original)
-  const sectionNumber = nextAgentsSectionNumber(original)
+
+  // 同名章（不论带不带编号）已存在就拒绝；按解析出的章标题比，围栏代码里的 `## ` 不算
+  if (parsed.blocks.some((block) => stripChapterNumber(block.title) === bareTitle)) {
+    return { ok: false, reason: 'already-present', title: bareTitle }
+  }
+
+  const sectionNumber = nextChapterNumber(parsed.blocks)
   const body = formatAgentsBody(input?.body, sectionNumber)
   // 允许「先建空章再编辑」：空正文不算错误
   const hasBody = String(input?.body ?? '').trim() !== ''
   if (hasBody && !body) return { ok: false, reason: 'empty-body' }
-  // 标题若自带旧编号，剥掉后由 renumberAgentsLines 统一分配
-  const bareTitle = title.replace(/^\d+(?:\.\d+)?\.\s*/, '')
-
-  if (new RegExp(`^##\\s+\\d+\\.\\s+${escapeRegExp(bareTitle)}\\s*$`, 'm').test(original)) {
-    return { ok: false, reason: 'already-present', title: bareTitle }
-  }
 
   const blocks = agentsBlocks(parsed)
   blocks.push({
     level: 2,
     title: bareTitle,
-    lines: [`## ${sectionNumber}. ${bareTitle}`, '', ...(body ? body.split('\n') : [])],
+    touched: true,
+    lines: [
+      `## ${sectionNumber}. ${bareTitle}`,
+      '',
+      ...(body ? body.split('\n') : []),
+      ...(input?.note ? ['', `<!-- ${oneLine(input.note)} -->`] : []),
+    ],
   })
   const written = writeAgentsDocument(file, original, parsed, blocks)
   if (!written.ok) return written
@@ -1576,7 +2020,7 @@ export function upsertAgentsChapter(input) {
   }
 
   // 2) 精确同名：更新，不追加
-  const hit = doc.sections.find((section) => section.title.replace(/^\d+\.\s*/, '') === bareTitle)
+  const hit = doc.sections.find((section) => stripChapterNumber(section.title) === bareTitle)
   if (hit) {
     const result = saveAgentsSection(hit.index, { title: bareTitle, body: input.body })
     return { ...result, action: 'updated', chapter: hit.index + 1, title: bareTitle }
@@ -1602,7 +2046,8 @@ function appPathFromRegistry(exeName) {
   for (const root of ['HKLM', 'HKCU']) {
     try {
       const key = `${root}\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exeName}`
-      const out = execFileSync('reg', ['query', key, '/ve'], { encoding: 'utf8', timeout: 3000 })
+      // stderr 必须丢掉：键不存在时 reg 会往（继承来的）宿主 stderr 打一行本地化的错误文本
+      const out = execFileSync('reg', ['query', key, '/ve'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
       const matched = /REG_SZ\s+(.+?)\s*$/m.exec(out)
       const candidate = matched?.[1]?.trim()
       if (candidate && existsSync(candidate)) return candidate
@@ -1627,7 +2072,7 @@ function firstExisting(paths) {
  * 探测顺序：配置里显式指定的 > Windows App Paths 注册表 > 常见安装路径。
  * 永远至少返回「系统默认」一项，保证入口不会失效。
  */
-export function detectEditors() {
+function probeEditors() {
   const found = []
 
   if (CONFIG.editorExe && existsSync(CONFIG.editorExe)) {
@@ -1682,6 +2127,37 @@ export function detectEditors() {
 }
 
 /**
+ * 探测结果在进程生命周期内记一次：探测要同步起 `reg` 子进程（每次几十毫秒，最坏每个 3 秒），
+ * 而 GET /agents 每次面板刷新都会调它，不能每次都堵宿主的事件循环。
+ * 以 editorExe 配置为键——改了配置会重新探测；装了新编辑器要重载插件（或调 resetEditorCache）。
+ */
+let editorCache = null
+
+export function detectEditors() {
+  if (!editorCache || editorCache.key !== CONFIG.editorExe) {
+    editorCache = { key: CONFIG.editorExe, list: probeEditors() }
+  }
+  return editorCache.list.map((entry) => ({ ...entry }))
+}
+
+/** 清掉 detectEditors 的缓存（测试用）。 */
+export function resetEditorCache() {
+  editorCache = null
+}
+
+/**
+ * 启动一个不等待的子进程。
+ *
+ * 必须挂 'error' 监听：ENOENT / EACCES 之类是**异步**抛的，没人监听就是未捕获异常，
+ * 而 try/catch 只接得住同步抛出——会把宿主进程带崩。
+ */
+function launchDetached(command, args, options = {}) {
+  const child = spawn(command, args, { detached: true, stdio: 'ignore', ...options })
+  child.on('error', (error) => console.error(`[workspace-memory] 打开 AGENTS.md 失败：${error.message}`))
+  child.unref()
+}
+
+/**
  * 打开全局 AGENTS.md。
  *
  * editorId 为空时用配置的 editorExe；都不可用则退回系统默认程序。
@@ -1702,17 +2178,18 @@ export function openAgentsFile(editorId) {
     if (wanted && wanted.exe) {
       if (wanted.viaShell) {
         // .cmd 转发器必须经 shell 启动，否则 spawn 会 ENOENT 或参数丢失
-        spawn(`"${wanted.exe}" "${file}"`, { shell: true, detached: true, stdio: 'ignore' }).unref()
+        launchDetached(`"${wanted.exe}" "${file}"`, [], { shell: true })
       } else {
-        spawn(wanted.exe, [file], { detached: true, stdio: 'ignore' }).unref()
+        launchDetached(wanted.exe, [file])
       }
       return { ok: true, agentsPath: file, app: wanted.name, editorId: wanted.id }
     }
     if (process.platform === 'win32') {
-      spawn('cmd', ['/c', 'start', '""', `"${file}"`], { detached: true, stdio: 'ignore' }).unref()
+      // 参数不要自己加引号：Node 会按需加并把内嵌引号转义成 \"，cmd 读不懂，start 就打不开文件
+      launchDetached('cmd', ['/c', 'start', '', file])
       return { ok: true, agentsPath: file, app: 'system-default', editorId: 'system' }
     }
-    spawn('xdg-open', [file], { detached: true, stdio: 'ignore' }).unref()
+    launchDetached('xdg-open', [file])
     return { ok: true, agentsPath: file, app: 'system-default', editorId: 'system' }
   } catch (error) {
     return { ok: false, reason: 'launch-failed', agentsPath: file, error: String(error?.message ?? error) }
@@ -2012,7 +2489,7 @@ export function rebuildIndex(memoryDir) {
   }
 
   ensureDir(memoryDir)
-  writeFileSync(indexPath(memoryDir), text, 'utf8')
+  writeFileAtomic(indexPath(memoryDir), text)
   return { count: seen.size, lineCount, byteCount }
 }
 
@@ -2445,11 +2922,7 @@ function recordHits(memoryDir, ids) {
       const file = path.join(memoriesPath(memoryDir), `${id}.md`)
       if (!existsSync(file)) continue
       const { data, body } = parseFrontmatter(readFileSync(file, 'utf8'))
-      writeFileSync(
-        file,
-        serializeFrontmatter({ ...data, hits: Number(data.hits ?? 0) + 1, lastHit: now }, body),
-        'utf8',
-      )
+      writeFileAtomic(file, serializeFrontmatter({ ...data, hits: Number(data.hits ?? 0) + 1, lastHit: now }, body))
       memoryCache.delete(file)
     } catch {
       // 计数失败不影响检索本身

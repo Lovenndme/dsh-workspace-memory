@@ -198,11 +198,15 @@ console.log('\n== 写前留档 ==')
 {
   const env = makeEnv()
   try {
+    const before = readFileSync(env.file, 'utf8')
     mod.saveAgentsSection(0, { title: '改了', body: '正文' })
-    // 历史目录在真实 home 下，只断言「至少写了一份」
-    const histDir = path.join(os.homedir(), '.dsh', '.dsh-workspace-memory-history', 'agents')
+    // 非真实路径的留档落在目标文件旁边的 .agents-history/；断言真实 ~/.dsh 下的历史会因为它
+    // 早就存在而空过（上一版就是这样），所以只看临时文件自己的这个目录。
+    const histDir = path.join(env.root, '.agents-history')
     check('历史目录存在', existsSync(histDir), histDir)
-    check('至少有一份留档', existsSync(histDir) ? readdirSync(histDir).length > 0 : false)
+    const backups = existsSync(histDir) ? readdirSync(histDir) : []
+    check('恰好留了一份档', backups.length === 1, JSON.stringify(backups))
+    check('留档内容是写入前的原文', backups.length === 1 && readFileSync(path.join(histDir, backups[0]), 'utf8') === before)
   } finally {
     env.cleanup()
     mod.configure(undefined)
