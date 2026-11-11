@@ -32,7 +32,6 @@ window.__ModuleLoader__.load({
     const AGENTS_URL = '/api/dsh-workspace-memory/agents'
     const PROMOTE_URL = '/api/dsh-workspace-memory/promote'
     const OPEN_AGENTS_URL = '/api/dsh-workspace-memory/open-agents'
-    const DIAG_URL = '/api/dsh-workspace-memory/diag'
     const TAB_KIND = 'memory-list'
     const TAB_ID = 'dsh-workspace-memory/list'
 
@@ -109,6 +108,7 @@ window.__ModuleLoader__.load({
       'agents.deleted': '已删除章节',
       'agents.added': '已新增章节',
       'agents.full': 'AGENTS.md 已达上限（{bytes}/{limit} 字节），请先合并或删除一章',
+      'agents.guardDescription': '当前章节有未保存的修改。',
 
       'editor.edit': '编辑',
       'editor.preview': '预览',
@@ -130,6 +130,8 @@ window.__ModuleLoader__.load({
       'state.opened': '已用 {app} 打开',
 
       'error.titleRequired': '标题不能为空',
+      'error.singleLine': '不能包含换行',
+      'error.noSession': '没有可用的会话',
       'error.titleTooLong': '标题不能超过 200 字符',
       'error.bodyRequired': '正文不能为空',
       'error.bodyTooLong': '正文不能超过 20000 字符',
@@ -179,12 +181,24 @@ window.__ModuleLoader__.load({
 
       'promote.hint': '写入全局 AGENTS.md，并从项目库移出',
       'promote.failed': '操作失败',
-      'promote.already-present': 'AGENTS.md 里已有同名小节，未重复追加',
-      'promote.scope-not-global': '这条记忆不是「跨项目」，不能写入',
-      'promote.agents-missing': '找不到 AGENTS.md',
-      'promote.not-found': '找不到这条记忆',
-      'promote.write-failed': '写入 AGENTS.md 失败',
-      'promote.read-failed': '读取 AGENTS.md 失败',
+
+      // 宿主返回的失败原因码 → 人话（reasonText 只认这里列出的码，未知码不外露）
+      'reason.invalid-id': '记忆 id 不合法',
+      'reason.invalid-index': '章节位置不合法',
+      'reason.not-found': '找不到这条记忆',
+      'reason.section-not-found': '找不到这一章',
+      'reason.section-moved': '这一章在文件里已经变化，已重新读取',
+      'reason.only-chapter': '这里只能删除整章',
+      'reason.scope-not-global': '这条记忆不是「跨项目」，不能写入',
+      'reason.agents-missing': '找不到 AGENTS.md',
+      'reason.agents-full': 'AGENTS.md 已达字节上限，请先合并或删除一章',
+      'reason.already-present': 'AGENTS.md 里已有同名小节，未重复追加',
+      'reason.empty-title': '标题不能为空',
+      'reason.empty-body': '正文不能为空',
+      'reason.library-full': '记忆库已达条数上限，请先删除一些',
+      'reason.read-failed': '读取 AGENTS.md 失败',
+      'reason.write-failed': '写入 AGENTS.md 失败',
+      'reason.launch-failed': '无法启动编辑器',
 
       'type.user': '用户偏好',
       'type.feedback': '纠正反馈',
@@ -258,6 +272,7 @@ window.__ModuleLoader__.load({
       'agents.deleted': 'Chapter deleted',
       'agents.added': 'Chapter added',
       'agents.full': 'AGENTS.md is at its limit ({bytes}/{limit} bytes). Merge or delete a chapter first.',
+      'agents.guardDescription': 'This chapter has unsaved changes.',
 
       'editor.edit': 'Edit',
       'editor.preview': 'Preview',
@@ -279,6 +294,8 @@ window.__ModuleLoader__.load({
       'state.opened': 'Opened with {app}',
 
       'error.titleRequired': 'Title is required',
+      'error.singleLine': 'Must be a single line',
+      'error.noSession': 'No active session',
       'error.titleTooLong': 'Title must be at most 200 characters',
       'error.bodyRequired': 'Body is required',
       'error.bodyTooLong': 'Body must be at most 20000 characters',
@@ -328,12 +345,23 @@ window.__ModuleLoader__.load({
 
       'promote.hint': 'Write to the global AGENTS.md and remove it from the project library',
       'promote.failed': 'Operation failed',
-      'promote.already-present': 'AGENTS.md already has a section with this title; nothing appended',
-      'promote.scope-not-global': 'This memory is not cross-project, so it cannot be written',
-      'promote.agents-missing': 'AGENTS.md not found',
-      'promote.not-found': 'Memory not found',
-      'promote.write-failed': 'Could not write AGENTS.md',
-      'promote.read-failed': 'Could not read AGENTS.md',
+
+      'reason.invalid-id': 'Invalid memory id',
+      'reason.invalid-index': 'Invalid chapter position',
+      'reason.not-found': 'Memory not found',
+      'reason.section-not-found': 'Chapter not found',
+      'reason.section-moved': 'This chapter changed in the file; reloaded',
+      'reason.only-chapter': 'Only whole chapters can be deleted',
+      'reason.scope-not-global': 'This memory is not cross-project, so it cannot be written',
+      'reason.agents-missing': 'AGENTS.md not found',
+      'reason.agents-full': 'AGENTS.md is at its size limit. Merge or delete a chapter first.',
+      'reason.already-present': 'AGENTS.md already has a section with this title; nothing appended',
+      'reason.empty-title': 'Title is required',
+      'reason.empty-body': 'Body is required',
+      'reason.library-full': 'The memory library is full. Delete some first.',
+      'reason.read-failed': 'Could not read AGENTS.md',
+      'reason.write-failed': 'Could not write AGENTS.md',
+      'reason.launch-failed': 'Could not launch the editor',
 
       'type.user': 'User preference',
       'type.feedback': 'Feedback',
@@ -682,7 +710,7 @@ window.__ModuleLoader__.load({
     /** 行内 Markdown：先转义，再按白名单语法重建标签。 */
     function inlineMarkdown(text, depth = 0) {
       if (depth > 3) return escapeHTML(text)
-      const token = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|__([^_\n]+)__|\[([^\]\n]+)\]\(([^\s)]+)\)|\*([^*\n]+)\*|~~([^~\n]+)~~/g
+      const token = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|__([^_\n]+)__|\[([^\]\n]{1,300})\]\(([^\s)]{1,1000})\)|\*([^*\n]+)\*|~~([^~\n]+)~~/g
       let result = ''
       let cursor = 0
       let match
@@ -721,6 +749,11 @@ window.__ModuleLoader__.load({
       }
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i]
+        // 空行是段落分隔符；以前它被当成段落内容，「a 空行 b」会渲染成 <p>a<br><br>b</p>
+        if (line.trim() === '') {
+          flush()
+          continue
+        }
         const fence = line.match(/^\s*(`{3,}|~{3,})([\w+-]*)\s*$/)
         if (fence) {
           flush()
@@ -822,17 +855,96 @@ window.__ModuleLoader__.load({
     function validateDraft(draft) {
       const errors = {}
       if (!draft.title || !draft.title.trim()) errors.title = t('error.titleRequired')
+      else if (/[\r\n]/.test(draft.title)) errors.title = t('error.singleLine')
       else if (draft.title.length > 200) errors.title = t('error.titleTooLong')
       if (!draft.body || !draft.body.trim()) errors.body = t('error.bodyRequired')
       else if (draft.body.length > 20000) errors.body = t('error.bodyTooLong')
       if (!TYPES.includes(draft.type)) errors.type = t('error.typeInvalid')
       if (draft.scope !== 'global' && draft.scope !== 'project') errors.scope = t('error.scopeInvalid')
       if (!/^[a-z0-9][a-z0-9-]*$/.test(String(draft.slug ?? '').trim())) errors.slug = t('error.slugInvalid')
-      if (draft.description.length > 120) errors.description = t('error.descriptionTooLong')
+      if (/[\r\n]/.test(draft.description)) errors.description = t('error.singleLine')
+      else if (draft.description.length > 120) errors.description = t('error.descriptionTooLong')
       const tags = draft.tags ?? []
       if (tags.length > 20) errors.tags = t('error.tooManyTags')
       else if (tags.some((tag) => tag.length > 40 || /[,]/.test(tag) || /\]/.test(tag))) errors.tags = t('error.tagInvalid')
       return errors
+    }
+
+    /** 标题/摘要是 frontmatter 里的单行字段：换行会让宿主写出损坏的文件。 */
+    function singleLine(value) {
+      return String(value ?? '').replace(/[\r\n]+/g, ' ')
+    }
+
+    /**
+     * 输入法组字中？React 的合成键盘事件不带 isComposing（只有原生事件有），
+     * 所以必须同时看 nativeEvent；keyCode 229 是各浏览器对「组字中按键」的统一标记。
+     */
+    function isImeEvent(event) {
+      return Boolean(event?.isComposing || event?.nativeEvent?.isComposing || event?.keyCode === 229)
+    }
+
+    /** AGENTS.md 章标题去掉编号（`3. 标题` → `标题`），与宿主 expectedTitle 的口径一致。 */
+    function bareTitle(title) {
+      return String(title ?? '').trim().replace(/^\d+(?:\.\d+)?\.\s*/, '')
+    }
+
+    /** 重新读取后按「用户看到的标题」找回这一章现在的位置：优先原位置，找不到返回 -1。 */
+    function locateSection(sections, title, hintIndex) {
+      if (!Array.isArray(sections)) return -1
+      const want = bareTitle(title)
+      if (sections[hintIndex] && bareTitle(sections[hintIndex].title) === want) return hintIndex
+      return sections.findIndex((section) => bareTitle(section.title) === want)
+    }
+
+    /** 保存成功后用宿主返回的记忆替换列表里的旧条目（改 slug 会换 id，fromId 是旧 id）。 */
+    function replaceMemory(data, fromId, memory) {
+      return { ...data, memories: data.memories.map((item) => (item.id === fromId ? memory : item)) }
+    }
+
+    function removeMemory(data, id) {
+      return {
+        ...data,
+        memories: data.memories.filter((item) => item.id !== id),
+        pending: data.pending.filter((item) => item.id !== id),
+      }
+    }
+
+    /** 宿主可能返回的失败原因码；每个都必须在 ZH / EN 里有 `reason.<码>`。 */
+    const KNOWN_REASONS = [
+      'invalid-id',
+      'invalid-index',
+      'not-found',
+      'section-not-found',
+      'section-moved',
+      'only-chapter',
+      'scope-not-global',
+      'agents-missing',
+      'agents-full',
+      'already-present',
+      'empty-title',
+      'empty-body',
+      'library-full',
+      'read-failed',
+      'write-failed',
+      'launch-failed',
+    ]
+
+    /**
+     * 把宿主的失败响应翻成一句人话。原因码只认 KNOWN_REASONS（原码绝不外露），
+     * 其次取宿主给的 errors[0] / error 文本，最后落到调用方给的兜底文案。
+     */
+    function reasonText(payload, fallback) {
+      for (const code of [payload?.reason, payload?.error]) {
+        if (typeof code !== 'string' || !KNOWN_REASONS.includes(code)) continue
+        if (code === 'agents-full' && Number.isFinite(payload.bytes) && Number.isFinite(payload.limit)) {
+          return t('agents.full', { bytes: payload.bytes, limit: payload.limit })
+        }
+        return t(`reason.${code}`)
+      }
+      const first = Array.isArray(payload?.errors) ? payload.errors.find((item) => typeof item === 'string' && item) : undefined
+      if (first) return first
+      if (typeof payload?.error === 'string' && payload.error) return payload.error
+      return fallback
     }
 
 
@@ -976,6 +1088,16 @@ window.__ModuleLoader__.load({
         highlightLine,
         normalizeTag,
         validateDraft,
+        singleLine,
+        isImeEvent,
+        bareTitle,
+        locateSection,
+        replaceMemory,
+        removeMemory,
+        reasonText,
+        toDraft,
+        KNOWN_REASONS,
+        dictionaries: { ZH, EN },
       })
     }
 
@@ -1016,7 +1138,7 @@ window.__ModuleLoader__.load({
     /** 服务端返回的 memory → 可编辑草稿。字段与应用补丁一致（不含 confidence）。 */
     function toDraft(memory) {
       return {
-        slug: memory.slug ?? memory.name ?? memory.id ?? '',
+        slug: memory.slug ?? memory.id ?? memory.name ?? '',
         title: memory.title ?? '',
         description: memory.description ?? '',
         type: memory.type ?? 'project',
@@ -1042,8 +1164,16 @@ window.__ModuleLoader__.load({
      * 原生 <dialog>：需要 showModal() 才有背景遮罩与焦点环路，
      * 而样式表里的 `::backdrop` 也只对原生 dialog 生效。
      */
+    let dialogSeq = 0
+
     function Dialog({ open, title, description, children, onCancel }) {
       const ref = useRef(null)
+      // 同一页面有多个对话框，id 必须各不相同，aria-labelledby 才指得对
+      const idRef = useRef(null)
+      if (idRef.current === null) {
+        dialogSeq += 1
+        idRef.current = `wsm-dialog-title-${dialogSeq}`
+      }
 
       useEffect(() => {
         const element = ref.current
@@ -1062,13 +1192,13 @@ window.__ModuleLoader__.load({
         {
           ref,
           className: 'wsm-dialog',
-          'aria-labelledby': 'wsm-dialog-title',
+          'aria-labelledby': idRef.current,
           onCancel: (event) => {
             event.preventDefault()
             onCancel?.()
           },
         },
-        h('h2', { id: 'wsm-dialog-title' }, title),
+        h('h2', { id: idRef.current }, title),
         description ? h('p', null, description) : null,
         h('div', { className: 'wsm-dialog-actions' }, children),
       )
@@ -1155,7 +1285,7 @@ window.__ModuleLoader__.load({
                 'aria-label': t('field.tagPlaceholder'),
                 onChange: (event) => setValue(event.target.value),
                 onKeyDown: (event) => {
-                  if (event.isComposing) return
+                  if (isImeEvent(event)) return
                   if (event.key === 'Enter') {
                     event.preventDefault()
                     commit(value)
@@ -1346,6 +1476,8 @@ window.__ModuleLoader__.load({
       const errors = doc.errors
       const titleRef = useRef(null)
       const descriptionRef = useRef(null)
+      // 预览只在正文变化时重算；每次面板重渲染都重跑 Markdown 解析没有意义
+      const previewHtml = useMemo(() => (bodyView === 'preview' ? renderMarkdown(draft.body) : ''), [bodyView, draft.body])
 
       // 标题/摘要用多行 textarea 自适应高度，长标题不截断
       const autoSize = useCallback((element) => {
@@ -1364,8 +1496,13 @@ window.__ModuleLoader__.load({
 
       const errorProp = (key) => (errors[key] ? { 'aria-invalid': 'true', 'aria-describedby': `wsm-${key}-error` } : {})
 
-      const editable = !doc.saving
+      // 待确认草稿只能收下或丢弃：宿主没有「改草稿」的接口，编辑了也存不下来
+      const editable = !doc.saving && !isPending
       const canPromote = !isPending && draft.scope === 'global'
+      // 标题/摘要是 frontmatter 单行字段：拦住回车（输入法组字中的回车除外），粘贴的换行也压平
+      const blockEnter = (event) => {
+        if (event.key === 'Enter' && !isImeEvent(event)) event.preventDefault()
+      }
 
       return h(
         'section',
@@ -1395,7 +1532,8 @@ window.__ModuleLoader__.load({
                 spellCheck: false,
                 disabled: !editable,
                 ...errorProp('title'),
-                onChange: (event) => onField('title', event.target.value),
+                onChange: (event) => onField('title', singleLine(event.target.value)),
+                onKeyDown: blockEnter,
                 onBlur: () => onBlurField('title'),
               }),
               fieldError('title'),
@@ -1414,7 +1552,8 @@ window.__ModuleLoader__.load({
                 spellCheck: false,
                 disabled: !editable,
                 ...errorProp('description'),
-                onChange: (event) => onField('description', event.target.value),
+                onChange: (event) => onField('description', singleLine(event.target.value)),
+                onKeyDown: blockEnter,
                 onBlur: () => onBlurField('description'),
               }),
               fieldError('description'),
@@ -1529,7 +1668,7 @@ window.__ModuleLoader__.load({
               : h(
                   'div',
                   { className: 'wsm-preview', tabIndex: 0 },
-                  h('article', { dangerouslySetInnerHTML: { __html: renderMarkdown(draft.body) } }),
+                  h('article', { dangerouslySetInnerHTML: { __html: previewHtml } }),
                 ),
           ),
         ),
@@ -1682,7 +1821,7 @@ window.__ModuleLoader__.load({
      * Markdown 指令文件。所以只做三件事：看、改、增删章。
      * 每章 = `## N. 标题` + 其下的 `### N.M` 子节整体，删章不会留下孤儿子节。
      */
-    function AgentsPane({ layout, onToast }) {
+    function AgentsPane({ layout, onToast, onChanged, reloadToken, leaveRef }) {
       const [doc, setDoc] = useState({ loading: true, error: '', path: '', bytes: 0, sections: [] })
       const [selected, setSelected] = useState(null)
       const [draft, setDraft] = useState(null)
@@ -1692,32 +1831,20 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState('list')
       const [bodyView, setBodyView] = useState('edit')
       const [pendingDelete, setPendingDelete] = useState(null)
+      const [guard, setGuard] = useState(null)
       const [addOpen, setAddOpen] = useState(false)
+      const [addError, setAddError] = useState('')
       const [newTitle, setNewTitle] = useState('')
 
-      const load = useCallback(async () => {
-        try {
-          const response = await fetch(AGENTS_SECTIONS_URL)
-          const payload = await response.json().catch(() => ({}))
-          if (!payload.ok) throw new Error(payload.reason ?? 'load failed')
-          const next = {
-            loading: false,
-            error: '',
-            path: payload.path,
-            bytes: payload.bytes,
-            sections: Array.isArray(payload.sections) ? payload.sections : [],
-          }
-          setDoc(next)
-          return next
-        } catch (err) {
-          setDoc((prev) => ({ ...prev, loading: false, error: err?.message ?? String(err) }))
-          return null
-        }
-      }, [])
-
-      useEffect(() => {
-        void load()
-      }, [load])
+      const dirty = Boolean(draft && baseline && (draft.title !== baseline.title || draft.body !== baseline.body))
+      // 异步回调里要读「现在」的选中与基线，不能用发起请求时的闭包
+      const live = useRef(null)
+      live.current = { selected, baseline, dirty }
+      const loadSeq = useRef(0)
+      const previewHtml = useMemo(
+        () => (bodyView === 'preview' && draft ? renderMarkdown(draft.body) : ''),
+        [bodyView, draft?.body],
+      )
 
       const beginEdit = useCallback((section, index, keepList) => {
         setSelected(index)
@@ -1728,13 +1855,58 @@ window.__ModuleLoader__.load({
         if (!keepList) setView('detail')
       }, [])
 
+      /**
+       * 读取章节。章是靠「位置」寻址的，文件被外部改动后位置会变：
+       * options.remap 时按用户看到的标题找回正在编辑的那一章，找不到就放弃选中并提示。
+       */
+      const load = useCallback(
+        async (options = {}) => {
+          loadSeq.current += 1
+          const seq = loadSeq.current
+          try {
+            const response = await fetch(AGENTS_SECTIONS_URL)
+            const payload = await response.json().catch(() => ({}))
+            if (!payload.ok) throw new Error(reasonText(payload, t('error.load')))
+            const next = {
+              loading: false,
+              error: '',
+              path: payload.path,
+              bytes: payload.bytes,
+              sections: Array.isArray(payload.sections) ? payload.sections : [],
+            }
+            // 已被更新的读取取代：数据还给调用方，但不写进状态
+            if (seq !== loadSeq.current) return next
+            setDoc(next)
+            const { selected: at, baseline: base, dirty: edited } = live.current
+            if (options.remap && base) {
+              const index = locateSection(next.sections, base.title, at)
+              if (index < 0) {
+                setSelected(null)
+                setError(t('reason.section-moved'))
+              } else if (!edited) beginEdit(next.sections[index], index, true)
+              else if (index !== at) setSelected(index)
+            }
+            return next
+          } catch (err) {
+            if (seq === loadSeq.current) setDoc((prev) => ({ ...prev, loading: false, error: err?.message ?? String(err) }))
+            return null
+          }
+        },
+        [beginEdit],
+      )
+
+      // 首次挂载读一次；顶部「刷新」递增 reloadToken 时再读一次（并保住正在编辑的章）
+      useEffect(() => {
+        void load({ remap: reloadToken > 0 }).then((next) => {
+          if (next && reloadToken > 0) onToast(t('state.refreshed'))
+        })
+      }, [load, reloadToken])
+
       // 首次载入自动选第一章；单栏时停在列表，不强行跳转
       useEffect(() => {
         if (doc.loading || draft || doc.sections.length === 0) return
         beginEdit(doc.sections[0], 0, layout === 'single')
       }, [doc, draft, layout, beginEdit])
-
-      const dirty = Boolean(draft && baseline && (draft.title !== baseline.title || draft.body !== baseline.body))
 
       const post = async (url, body) => {
         const response = await fetch(url, {
@@ -1745,49 +1917,60 @@ window.__ModuleLoader__.load({
         return response.json().catch(() => ({}))
       }
 
-      /** 把服务端的 reason 码翻成人话；字节超限要带上具体数字才可操作。 */
+      /** 失败响应 → 提示。章被挪动时顺手重读，让界面回到文件的真实状态。 */
       const failText = (payload) => {
-        if (payload?.reason === 'agents-full') {
-          return t('agents.full', { bytes: payload.bytes, limit: payload.limit })
-        }
-        return payload?.errors?.[0] ?? payload?.reason ?? t('error.save')
+        if (payload?.reason === 'section-moved') void load({ remap: true })
+        return reasonText(payload, t('error.save'))
       }
 
       const save = async () => {
-        if (!draft || selected === null || saving) return
+        if (!draft || selected === null || saving) return false
         if (!draft.title.trim()) {
           setError(t('error.titleRequired'))
-          return
+          return false
         }
+        const at = selected
         setSaving(true)
         setError('')
         try {
-          const payload = await post(AGENTS_SAVE_SECTION_URL, { index: selected, title: draft.title, body: draft.body })
+          const payload = await post(AGENTS_SAVE_SECTION_URL, {
+            index: at,
+            expectedTitle: bareTitle(baseline?.title ?? draft.title),
+            title: draft.title,
+            body: draft.body,
+          })
           if (!payload.ok) {
             setError(failText(payload))
-            return
+            return false
           }
           const next = await load()
+          void onChanged?.()
           onToast(t('agents.saved'))
-          const current = next?.sections?.[selected]
-          if (current) beginEdit(current, selected, true)
+          const current = next?.sections?.[at]
+          if (current) beginEdit(current, at, true)
+          return true
         } catch (err) {
           setError(err?.message ?? String(err))
+          return false
         } finally {
           setSaving(false)
         }
       }
 
-      const remove = async (index) => {
+      const remove = async (target) => {
         setSaving(true)
         setError('')
         try {
-          const payload = await post(AGENTS_DELETE_SECTION_URL, { index })
+          const payload = await post(AGENTS_DELETE_SECTION_URL, {
+            index: target.index,
+            expectedTitle: bareTitle(target.title),
+          })
           if (!payload.ok) {
             setError(failText(payload))
             return
           }
           await load()
+          void onChanged?.()
           setDraft(null)
           setBaseline(null)
           setSelected(null)
@@ -1802,26 +1985,49 @@ window.__ModuleLoader__.load({
 
       const add = async () => {
         const title = newTitle.trim()
-        if (!title) return
+        if (!title || saving) return
         setSaving(true)
-        setError('')
+        setAddError('')
         try {
           const payload = await post(AGENTS_ADD_SECTION_URL, { title, body: '' })
           if (!payload.ok) {
-            setError(failText(payload))
+            setAddError(failText(payload))
             return
           }
           const next = await load()
+          void onChanged?.()
           setAddOpen(false)
           setNewTitle('')
           onToast(t('agents.added'))
           const last = next ? next.sections.length - 1 : -1
           if (next && last >= 0) beginEdit(next.sections[last], last, layout === 'single')
         } catch (err) {
-          setError(err?.message ?? String(err))
+          setAddError(err?.message ?? String(err))
         } finally {
           setSaving(false)
         }
+      }
+
+      // 离开当前章（换章 / 新增章 / 切回记忆库）之前的未保存守卫
+      const requestLeave = (action) => {
+        if (!dirty) action()
+        else setGuard({ action })
+      }
+
+      // 把守卫入口交给面板：切到「记忆库」页签时也要过这一关
+      useEffect(() => {
+        if (!leaveRef) return undefined
+        leaveRef.current = requestLeave
+        return () => {
+          if (leaveRef.current === requestLeave) leaveRef.current = null
+        }
+      })
+
+      const onPaneKeyDown = (event) => {
+        if (!(event.ctrlKey || event.metaKey) || String(event.key).toLowerCase() !== 's') return
+        if (isImeEvent(event) || !dirty || saving || selected === null || guard || addOpen || pendingDelete) return
+        event.preventDefault()
+        void save()
       }
 
       const listPane = h(
@@ -1837,7 +2043,16 @@ window.__ModuleLoader__.load({
             h('div', { style: { flex: '1 1 auto' } }),
             h(
               'button',
-              { type: 'button', className: 'wsm-btn wsm-btn-small', disabled: saving, onClick: () => setAddOpen(true) },
+              {
+                type: 'button',
+                className: 'wsm-btn wsm-btn-small',
+                disabled: saving,
+                onClick: () =>
+                  requestLeave(() => {
+                    setAddError('')
+                    setAddOpen(true)
+                  }),
+              },
               t('agents.add'),
             ),
           ),
@@ -1859,7 +2074,14 @@ window.__ModuleLoader__.load({
                         type: 'button',
                         className: 'wsm-item',
                         'aria-selected': index === selected,
-                        onClick: () => beginEdit(section, index, false),
+                        disabled: saving,
+                        onClick: () => {
+                          if (index === selected && draft) {
+                            setView('detail')
+                            return
+                          }
+                          requestLeave(() => beginEdit(section, index, false))
+                        },
                       },
                       h('div', { className: 'wsm-item-title' }, section.title),
                       h(
@@ -1897,7 +2119,7 @@ window.__ModuleLoader__.load({
                     style: { fontSize: '17px' },
                     value: draft.title,
                     disabled: saving,
-                    onChange: (event) => setDraft({ ...draft, title: event.target.value }),
+                    onChange: (event) => setDraft({ ...draft, title: singleLine(event.target.value) }),
                   }),
                 ),
               ),
@@ -1938,7 +2160,7 @@ window.__ModuleLoader__.load({
                   : h(
                       'div',
                       { className: 'wsm-preview', tabIndex: 0 },
-                      h('article', { dangerouslySetInnerHTML: { __html: renderMarkdown(draft.body) } }),
+                      h('article', { dangerouslySetInnerHTML: { __html: previewHtml } }),
                     ),
               ),
             )
@@ -1964,14 +2186,15 @@ window.__ModuleLoader__.load({
                     type: 'button',
                     className: 'wsm-btn danger',
                     disabled: saving || selected === null,
-                    onClick: () => setPendingDelete({ index: selected, title: draft.title }),
+                    // 确认框和请求都用「用户看到的」标题（基线），而不是编辑到一半的草稿
+                    onClick: () => setPendingDelete({ index: selected, title: baseline?.title ?? draft.title }),
                   },
                   t('action.delete'),
                 )
               : null,
             h(
               'button',
-              { type: 'button', className: 'wsm-btn primary', disabled: saving || !dirty, onClick: save },
+              { type: 'button', className: 'wsm-btn primary', disabled: saving || !dirty || selected === null, onClick: save },
               saving ? t('state.saving') : t('agents.save'),
             ),
           ),
@@ -1980,9 +2203,50 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'wsm-agents-pane', 'data-view': view },
+        { className: 'wsm-agents-pane', 'data-view': view, onKeyDown: onPaneKeyDown },
         listPane,
         detailPane,
+
+        h(
+          Dialog,
+          {
+            open: Boolean(guard),
+            title: t('guard.title'),
+            description: t('agents.guardDescription'),
+            onCancel: () => setGuard(null),
+          },
+          h('button', { type: 'button', className: 'wsm-btn', onClick: () => setGuard(null) }, t('guard.continue')),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'wsm-btn',
+              onClick: () => {
+                const action = guard?.action
+                setGuard(null)
+                if (baseline) setDraft({ ...baseline })
+                action?.()
+              },
+            },
+            t('guard.discard'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'wsm-btn primary',
+              disabled: saving,
+              onClick: async () => {
+                const action = guard?.action
+                const saved = await save()
+                setGuard(null)
+                // 保存失败就停在原地（错误显示在底栏）：既不换章，也不离开
+                if (saved) action?.()
+              },
+            },
+            t('guard.save'),
+          ),
+        ),
 
         h(
           Dialog,
@@ -2001,7 +2265,7 @@ window.__ModuleLoader__.load({
               onClick: () => {
                 const target = pendingDelete
                 setPendingDelete(null)
-                if (target) void remove(target.index)
+                if (target) void remove(target)
               },
             },
             t('confirm.deleteOk'),
@@ -2021,12 +2285,15 @@ window.__ModuleLoader__.load({
             placeholder: t('agents.newTitle'),
             value: newTitle,
             autoFocus: true,
-            onChange: (event) => setNewTitle(event.target.value),
+            onChange: (event) => setNewTitle(singleLine(event.target.value)),
             onKeyDown: (event) => {
-              if (event.key === 'Enter') void add()
+              // 输入法组字时的回车是在确认候选词，不是提交
+              if (event.key === 'Enter' && !isImeEvent(event)) void add()
             },
             style: { marginBottom: '16px' },
           }),
+          // 失败原因要显示在对话框里：底栏被遮罩盖住，窄屏下详情栏还是隐藏的
+          addError ? h('p', { className: 'wsm-error', role: 'alert', style: { flex: '0 0 100%', margin: '0 0 12px' } }, addError) : null,
           h('button', { type: 'button', className: 'wsm-btn', onClick: () => setAddOpen(false) }, t('action.cancel')),
           h('button', { type: 'button', className: 'wsm-btn primary', disabled: saving, onClick: add }, t('action.confirm')),
         ),
@@ -2038,7 +2305,8 @@ window.__ModuleLoader__.load({
     /** 单栏/双栏切换阈值：低于它一次只显示一栏（详情替换列表）。 */
     const SINGLE_MAX_WIDTH = 780
 
-    const EMPTY_DOC = { draft: null, baseline: null, errors: {}, saving: false, status: '', saveError: '' }
+    // id：这份草稿属于哪条记忆。异步响应回来时靠它判断「用户是不是已经切走了」
+    const EMPTY_DOC = { id: null, draft: null, baseline: null, errors: {}, saving: false, status: '', saveError: '' }
 
     function MemoryPanel({ sessionId }) {
       const [data, setData] = useState({ loading: true, error: null, root: '', memories: [], pending: [], pendingEnabled: false })
@@ -2059,6 +2327,7 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState(null)
       const [agents, setAgents] = useState(null)
       const [editors, setEditors] = useState([])
+      const [agentsReload, setAgentsReload] = useState(0)
       const [editorId, setEditorId] = useState(() => {
         try {
           return window.localStorage?.getItem('dsh-workspace-memory:editor') ?? ''
@@ -2071,10 +2340,15 @@ window.__ModuleLoader__.load({
       const [width, setWidth] = useState(0)
       const docRef = useRef(EMPTY_DOC)
       const toastTimer = useRef(0)
-      const searchRef = useRef('')
+      const loadSeq = useRef(0)
+      const selectedIdRef = useRef(null)
+      const agentsLeaveRef = useRef(null)
 
       docRef.current = doc
-      searchRef.current = query
+      selectedIdRef.current = selectedId
+
+      // 渲染期算出的「脏」，给 effect 当依赖；异步回调里读最新状态用下面的 isDirty()
+      const dirty = Boolean(doc.draft && doc.baseline && !sameDraft(doc.draft, doc.baseline))
 
       // 没有草稿时不算「脏」——否则面板打开后永远不会自动选中第一条
       const isDirty = useCallback(() => {
@@ -2126,7 +2400,7 @@ window.__ModuleLoader__.load({
           return
         }
         const draft = toDraft(memory)
-        setDoc({ draft, baseline: { ...draft, tags: [...draft.tags] }, errors: {}, saving: false, status: '', saveError: '' })
+        setDoc({ id: memory.id, draft, baseline: { ...draft, tags: [...draft.tags] }, errors: {}, saving: false, status: '', saveError: '' })
         setTagError('')
         setBodyView('edit')
         setFileOpen(false)
@@ -2136,8 +2410,11 @@ window.__ModuleLoader__.load({
       const load = useCallback(
         async (options = {}) => {
           const { silent = false } = options
+          // 每次读取领一个序号：先发后到的旧响应不能盖掉新响应
+          loadSeq.current += 1
+          const seq = loadSeq.current
           if (!sessionId) {
-            setData((prev) => ({ ...prev, loading: false, error: 'no-session' }))
+            setData((prev) => ({ ...prev, loading: false, error: t('error.noSession') }))
             return null
           }
           if (!silent) setData((prev) => ({ ...prev, loading: true, error: null }))
@@ -2146,7 +2423,7 @@ window.__ModuleLoader__.load({
               headers: { accept: 'application/json' },
             })
             const payload = await response.json().catch(() => ({}))
-            if (!response.ok || !payload.ok) throw new Error(payload.errors?.[0] ?? `HTTP ${response.status}`)
+            if (!response.ok || !payload.ok) throw new Error(reasonText(payload, `HTTP ${response.status}`))
             const next = {
               loading: false,
               error: null,
@@ -2155,10 +2432,13 @@ window.__ModuleLoader__.load({
               pending: Array.isArray(payload.pending) ? payload.pending : [],
               pendingEnabled: Boolean(payload.pendingEnabled),
             }
-            setData(next)
+            if (seq === loadSeq.current) setData(next)
             return next
           } catch (error) {
-            setData((prev) => ({ ...prev, loading: false, error: error?.message ?? String(error) }))
+            // 静默刷新失败不该把已有的列表换成报错（保存其实已经成功了）
+            if (seq === loadSeq.current && !silent) {
+              setData((prev) => ({ ...prev, loading: false, error: error?.message ?? String(error) }))
+            }
             return null
           }
         },
@@ -2169,29 +2449,26 @@ window.__ModuleLoader__.load({
         void load()
       }, [load])
 
-      // 选中项失效时回落到第一条；未保存时不自动跳走（守卫在交互处处理）
+      // 选中项失效时回落到第一条；未保存时不自动跳走（守卫在交互处处理）。
+      // 选中项消失后窄屏的详情页没有东西可看，也没有返回键，必须回到列表。
       useEffect(() => {
+        if (selectedId !== null && !visible.some((memory) => memory.id === selectedId)) setView('list')
+        if (dirty) return
         if (visible.length === 0) {
-          if (!isDirty()) {
-            setSelectedId(null)
-            setDoc(EMPTY_DOC)
-          }
+          setSelectedId(null)
+          setDoc(EMPTY_DOC)
           return
         }
-        if (!visible.some((memory) => memory.id === selectedId) && !isDirty()) {
-          setSelectedId(visible[0].id)
-        }
-      }, [visible, selectedId, isDirty])
+        if (!visible.some((memory) => memory.id === selectedId)) setSelectedId(visible[0].id)
+      }, [visible, selectedId, dirty])
 
-      // 选中的记录变了且当前没有未保存修改 → 用最新数据重建基线
+      // 选中的记录变了（或草稿属于别的记忆）且没有未保存修改 → 用最新数据重建基线
       useEffect(() => {
-        if (!selected) return
-        if (isDirty()) return
-        const current = toDraft(selected)
-        if (!docRef.current.baseline || !sameDraft(current, docRef.current.baseline)) {
+        if (!selected || dirty) return
+        if (doc.id !== selected.id || !doc.baseline || !sameDraft(toDraft(selected), doc.baseline)) {
           beginEdit(selected)
         }
-      }, [selected, isDirty, beginEdit])
+      }, [selected, dirty, doc.id, doc.baseline, beginEdit])
 
       /* ---- 编辑器字段 ---- */
       const setField = useCallback((field, value) => {
@@ -2218,19 +2495,21 @@ window.__ModuleLoader__.load({
       /* ---- 保存：真实接口，禁止乐观成功 ---- */
       const save = useCallback(async () => {
         const current = docRef.current
-        if (!current.draft || current.saving) return false
-        // 保存目标永远是「当前选中的那条」——不能用草稿里的 slug 反查，
-        // 因为 slug 可能刚被改过，改完 slug 服务端会重命名文件并换 id。
-        const targetId = selectedId
-        if (!targetId) return false
+        // 待确认草稿没有保存接口（宿主只认已入库的 id），只能收下或丢弃
+        if (!current.draft || !current.id || current.saving || tab === 'pending') return false
+        // 保存目标是这份草稿所属的记忆，不能用草稿里的 slug 反查——改 slug 会换 id
+        const targetId = current.id
 
         const fieldErrors = validateDraft(current.draft)
         if (Object.keys(fieldErrors).length > 0) {
           setDoc((prev) => ({ ...prev, errors: fieldErrors, status: 'dirty' }))
+          // 文件名只在「文件信息」弹层里改，它的错误必须让用户看得见
+          if (fieldErrors.slug) setFileOpen(true)
           return false
         }
 
         setDoc((prev) => ({ ...prev, saving: true, status: '', saveError: '', errors: {} }))
+        let landedId = targetId
         try {
           const response = await fetch(`${SAVE_URL}?session=${encodeURIComponent(sessionId)}`, {
             method: 'POST',
@@ -2250,51 +2529,48 @@ window.__ModuleLoader__.load({
           })
           const payload = await response.json().catch(() => ({}))
           if (!response.ok || !payload.ok) {
-            const messages = Array.isArray(payload.errors) && payload.errors.length ? payload.errors : [t('error.save')]
-            setDoc((prev) => ({
-              ...prev,
-              saving: false,
-              status: 'error',
-              saveError: messages.join('\n'),
-            }))
+            const message =
+              Array.isArray(payload.errors) && payload.errors.length
+                ? payload.errors.join('\n')
+                : reasonText(payload, t('error.save'))
+            setDoc((prev) => (prev.id === targetId ? { ...prev, status: 'error', saveError: message } : prev))
             return false
           }
 
-          // 改 slug 会重命名文件、id 随之变化 → 必须重拉列表，不能就地拼
-          if (payload.renamed) {
-            const next = await load({ silent: true })
-            const renamed = next?.memories.find((item) => item.title === current.draft.title) ?? null
-            if (renamed) {
-              setSelectedId(renamed.id)
-              beginEdit(renamed)
-            }
-            showToast(t('state.saved'))
-            return true
-          }
-
-          const saved = payload.memory ? toDraft(payload.memory) : current.draft
-          setDoc((prev) => ({
-            ...prev,
-            draft: saved,
-            baseline: { ...saved, tags: [...saved.tags] },
-            saving: false,
-            status: 'success',
-            saveError: '',
-          }))
-          if (payload.memory) {
-            setData((prev) => ({
+          // 宿主回读后的记忆就是真值：改 slug 时它带着新 id，不用再按标题去列表里找
+          const memory = payload.memory ?? null
+          landedId = memory?.id ?? targetId
+          if (memory) setData((prev) => replaceMemory(prev, payload.previousId ?? targetId, memory))
+          // 保存期间用户若已切到别的记忆，响应只更新列表，不碰当前文档
+          setDoc((prev) => {
+            if (prev.id !== targetId) return prev
+            const saved = memory ? toDraft(memory) : prev.draft
+            return {
               ...prev,
-              memories: prev.memories.map((item) => (item.id === payload.memory.id ? payload.memory : item)),
-              pending: prev.pending.map((item) => (item.id === payload.memory.id ? payload.memory : item)),
-            }))
-          }
+              id: landedId,
+              draft: saved,
+              baseline: { ...saved, tags: [...saved.tags] },
+              errors: {},
+              saving: false,
+              status: 'success',
+              saveError: '',
+            }
+          })
+          if (landedId !== targetId && selectedIdRef.current === targetId) setSelectedId(landedId)
+          // 排序可能因改名而变；回读不到记忆时也要靠整表刷新对齐
+          if (landedId !== targetId || !memory) void load({ silent: true })
           showToast(t('state.saved'))
           return true
         } catch (error) {
-          setDoc((prev) => ({ ...prev, saving: false, status: 'error', saveError: error?.message ?? String(error) }))
+          setDoc((prev) =>
+            prev.id === targetId ? { ...prev, status: 'error', saveError: error?.message ?? String(error) } : prev,
+          )
           return false
+        } finally {
+          // 无论成败都要解除「保存中」，否则整个面板会被锁死
+          setDoc((prev) => (prev.saving && (prev.id === targetId || prev.id === landedId) ? { ...prev, saving: false } : prev))
         }
-      }, [data.memories, data.pending, selectedId, sessionId, load, beginEdit, showToast])
+      }, [tab, sessionId, load, showToast])
 
       /* ---- 未保存守卫：所有「离开当前编辑」的入口都走这里 ---- */
       const requestTransition = useCallback(
@@ -2314,14 +2590,16 @@ window.__ModuleLoader__.load({
             if (layout === 'single') setView('detail')
             return
           }
+          // 点的若是当前选中的那条（有未保存修改才会走到这里），文档本身就是最新的
+          // （保存后是回读值，放弃后是基线），绝不能再用点击时的列表快照去重建它
+          const target = id === selectedId ? null : visible.find((item) => item.id === id)
           requestTransition(() => {
             setSelectedId(id)
-            const memory = data.memories.concat(data.pending).find((item) => item.id === id)
-            if (memory) beginEdit(memory)
+            if (target) beginEdit(target)
             if (layout === 'single') setView('detail')
           })
         },
-        [selectedId, isDirty, layout, requestTransition, data.memories, data.pending, beginEdit],
+        [selectedId, isDirty, layout, requestTransition, visible, beginEdit],
       )
 
       const changeTab = useCallback(
@@ -2356,16 +2634,37 @@ window.__ModuleLoader__.load({
         [tab, data.memories, data.pending, isDirty, selectedId, requestTransition, applySearch],
       )
 
+      /* ---- AGENTS.md 概况（列表底部那一行） ---- */
+      const loadAgents = useCallback(async () => {
+        try {
+          const response = await fetch(AGENTS_URL)
+          const payload = await response.json().catch(() => ({}))
+          if (payload?.ok) {
+            setAgents(payload.agents ?? null)
+            setEditors(Array.isArray(payload.editors) ? payload.editors : [])
+          }
+        } catch {
+          // 拿不到就不显示这一块
+        }
+      }, [])
+
+      useEffect(() => {
+        void loadAgents()
+      }, [loadAgents])
+
       const refresh = useCallback(() => {
+        // 全局页签下「刷新」刷的是 AGENTS.md 的章节（并保住正在编辑的章）
+        if (scope === 'global') {
+          setAgentsReload((value) => value + 1)
+          void loadAgents()
+          return
+        }
+        // 列表重载后，选中项的草稿由「重建基线」effect 负责对齐（有未保存修改时它不会动）
         requestTransition(async () => {
           const next = await load()
-          if (next && !isDirty()) {
-            const memory = next.memories.concat(next.pending).find((item) => item.id === selectedId)
-            if (memory) beginEdit(memory)
-          }
-          showToast(t('state.refreshed'))
+          if (next) showToast(t('state.refreshed'))
         })
-      }, [requestTransition, load, isDirty, selectedId, beginEdit, showToast])
+      }, [scope, requestTransition, load, loadAgents, showToast])
 
       const cancel = useCallback(() => {
         if (!isDirty()) {
@@ -2386,12 +2685,13 @@ window.__ModuleLoader__.load({
       const actPending = useCallback(
         async (endpoint) => {
           if (!selected) return
+          const targetId = selected.id
           setDoc((prev) => ({ ...prev, saving: true, saveError: '' }))
           try {
             const response = await fetch(`${endpoint}?session=${encodeURIComponent(sessionId)}`, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ id: selected.id }),
+              body: JSON.stringify({ id: targetId }),
             })
             const payload = await response.json().catch(() => ({}))
             if (!response.ok || !payload.ok) {
@@ -2399,39 +2699,25 @@ window.__ModuleLoader__.load({
                 ...prev,
                 saving: false,
                 status: 'error',
-                saveError: payload.errors?.[0] ?? payload.error ?? `HTTP ${response.status}`,
+                saveError: reasonText(payload, t('promote.failed')),
               }))
               return
             }
-            const next = await load({ silent: true })
+            // 先在本地摘掉这一条（重读失败也不会让它「诈尸」），再静默重读把收下的那条拉进来
+            setData((prev) => removeMemory(prev, targetId))
+            setDoc((prev) => (prev.id === targetId ? EMPTY_DOC : prev))
             setView('list')
-            setSelectedId(next?.memories[0]?.id ?? null)
+            void load({ silent: true })
+            if (endpoint === ACCEPT_URL) void loadAgents()
             showToast(endpoint === ACCEPT_URL ? t('state.accepted') : t('state.rejected'))
           } catch (error) {
             setDoc((prev) => ({ ...prev, saving: false, status: 'error', saveError: error?.message ?? String(error) }))
           }
         },
-        [selected, sessionId, load, showToast],
+        [selected, sessionId, load, loadAgents, showToast],
       )
 
       /* ---- 全局 AGENTS.md ---- */
-      const loadAgents = useCallback(async () => {
-        try {
-          const response = await fetch(AGENTS_URL)
-          const payload = await response.json().catch(() => ({}))
-          if (payload?.ok) {
-            setAgents(payload.agents ?? null)
-            setEditors(Array.isArray(payload.editors) ? payload.editors : [])
-          }
-        } catch {
-          // 拿不到就不显示这一块
-        }
-      }, [])
-
-      useEffect(() => {
-        void loadAgents()
-      }, [loadAgents])
-
       const rememberEditor = useCallback((id) => {
         setEditorId(id)
         try {
@@ -2454,7 +2740,7 @@ window.__ModuleLoader__.load({
             showToast(t('state.opened', { app: payload.app }))
             return
           }
-          setNotice({ title: t('promote.failed'), message: t(`promote.${payload?.reason ?? 'write-failed'}`) })
+          setNotice({ title: t('promote.failed'), message: reasonText(payload, t('promote.failed')) })
         } catch (error) {
           setNotice({ title: t('promote.failed'), message: error?.message ?? String(error) })
         }
@@ -2463,29 +2749,29 @@ window.__ModuleLoader__.load({
       /** 真正执行写入：确认之后才调用。 */
       const doPromote = useCallback(async () => {
         if (!selected) return
+        const targetId = selected.id
         setDoc((prev) => ({ ...prev, saving: true, saveError: '', status: '' }))
         try {
           const response = await fetch(`${PROMOTE_URL}?session=${encodeURIComponent(sessionId)}`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: selected.id }),
+            body: JSON.stringify({ id: targetId }),
           })
           const payload = await response.json().catch(() => ({}))
           if (!response.ok || !payload.ok) {
-            const reason = t(`promote.${payload?.reason ?? 'write-failed'}`)
             setDoc((prev) => ({
               ...prev,
               saving: false,
               status: 'error',
-              saveError: reason === `promote.${payload?.reason}` ? (payload.error ?? reason) : reason,
+              saveError: reasonText(payload, t('promote.failed')),
             }))
             return
           }
-          await load({ silent: true })
-          await loadAgents()
+          setData((prev) => removeMemory(prev, targetId))
+          setDoc((prev) => (prev.id === targetId ? EMPTY_DOC : prev))
           setView('list')
-          setSelectedId(null)
-          setDoc(EMPTY_DOC)
+          void load({ silent: true })
+          void loadAgents()
           showToast(t('state.promoted'))
         } catch (error) {
           setDoc((prev) => ({ ...prev, saving: false, status: 'error', saveError: error?.message ?? String(error) }))
@@ -2519,12 +2805,13 @@ window.__ModuleLoader__.load({
        */
       const doForget = useCallback(async () => {
         if (!selected) return
+        const targetId = selected.id
         setDoc((prev) => ({ ...prev, saving: true, saveError: '', status: '' }))
         try {
           const response = await fetch(`${FORGET_URL}?session=${encodeURIComponent(sessionId)}`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: selected.id }),
+            body: JSON.stringify({ id: targetId }),
           })
           const payload = await response.json().catch(() => ({}))
           if (!response.ok || !payload.ok) {
@@ -2532,14 +2819,14 @@ window.__ModuleLoader__.load({
               ...prev,
               saving: false,
               status: 'error',
-              saveError: payload.errors?.[0] ?? `HTTP ${response.status}`,
+              saveError: reasonText(payload, t('promote.failed')),
             }))
             return
           }
-          const next = await load({ silent: true })
+          setData((prev) => removeMemory(prev, targetId))
+          setDoc((prev) => (prev.id === targetId ? EMPTY_DOC : prev))
           setView('list')
-          setSelectedId(next?.memories[0]?.id ?? null)
-          setDoc(EMPTY_DOC)
+          void load({ silent: true })
           showToast(t('state.deleted'))
         } catch (error) {
           setDoc((prev) => ({ ...prev, saving: false, status: 'error', saveError: error?.message ?? String(error) }))
@@ -2561,8 +2848,13 @@ window.__ModuleLoader__.load({
         const onKeyDown = (event) => {
           if (event.isComposing) return
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+            // 只在「面板可见、焦点在面板里、当前是记忆库页签、确实有未保存修改」时接管；
+            // 否则不拦截，让宿主里别处的 Ctrl+S 照常工作
+            const root = rootRef.current
+            if (!root || !root.contains(event.target) || root.getClientRects().length === 0) return
+            if (scope !== 'project' || tab !== 'confirmed' || !isDirty() || docRef.current.saving) return
             event.preventDefault()
-            if (!docRef.current.saving && docRef.current.draft) void save()
+            void save()
             return
           }
           if (event.key === 'Escape') {
@@ -2575,7 +2867,7 @@ window.__ModuleLoader__.load({
         }
         document.addEventListener('keydown', onKeyDown)
         return () => document.removeEventListener('keydown', onKeyDown)
-      }, [save, fileOpen, fullscreen])
+      }, [save, fileOpen, fullscreen, scope, tab, isDirty])
 
       /* ---- 弹层外部点击关闭 ---- */
       useEffect(() => {
@@ -2610,7 +2902,6 @@ window.__ModuleLoader__.load({
       )
 
       const workspace = basename(data.root.replace(/[\\/]memory[\\/]?$/, ''))
-      const canPromote = selected && tab === 'confirmed' && doc.draft?.scope === 'global'
 
       return h(
         'div',
@@ -2656,7 +2947,10 @@ window.__ModuleLoader__.load({
                         requestTransition(() => setScope('global'))
                         return
                       }
-                      setScope('project')
+                      // 回到记忆库：AGENTS.md 章节有未保存改动时同样先过它自己的守卫
+                      const leave = agentsLeaveRef.current
+                      if (leave) leave(() => setScope('project'))
+                      else setScope('project')
                     },
                   },
                   label,
@@ -2808,7 +3102,7 @@ window.__ModuleLoader__.load({
           h(
             'section',
             { className: 'wsm-detail-pane', 'aria-label': t('detail.breadcrumb') },
-            selected && doc.draft
+            selected && doc.draft && doc.id === selected.id
               ? h(MemoryDetail, {
                   memory: selected,
                   doc,
@@ -2837,7 +3131,9 @@ window.__ModuleLoader__.load({
           ),
 
           // 全局模式：项目两栏由 CSS 隐藏，这里换成 AGENTS.md 面板
-          scope === 'global' ? h(AgentsPane, { layout, onToast: showToast }) : null,
+          scope === 'global'
+            ? h(AgentsPane, { layout, onToast: showToast, onChanged: loadAgents, reloadToken: agentsReload, leaveRef: agentsLeaveRef })
+            : null,
         ),
 
         toast ? h('div', { className: 'wsm-toast', role: 'status', 'aria-live': 'polite' }, toast) : null,
@@ -2929,6 +3225,14 @@ window.__ModuleLoader__.load({
     }
 
 
+    /**
+     * 换会话 = 换一个记忆库：用 sessionId 当 key 让面板整个重挂，
+     * 选中项、草稿、页签、视图、在途请求的回写一并作废，不用逐项重置。
+     */
+    function MemoryPanelRoot(props) {
+      return h(MemoryPanel, { ...props, key: props.sessionId ?? '' })
+    }
+
     /* ------------------------------------------------------------- apply */
 
     return {
@@ -2936,6 +3240,15 @@ window.__ModuleLoader__.load({
 
       apply(ctx) {
         cardContext = ctx
+
+        // 重试定时器与卡片用的 ctx 都要跟着插件一起释放，否则禁用后还会往已失效的 ctx 上注册
+        let disposed = false
+        let retryTimer = 0
+        ctx.effect(() => () => {
+          disposed = true
+          if (retryTimer) clearTimeout(retryTimer)
+          if (cardContext === ctx) cardContext = null
+        })
 
         // 交互反馈样式表：内联样式写不了 :hover / :active，只能挂一份真实 CSS
         ctx.effect(() => {
@@ -2946,8 +3259,6 @@ window.__ModuleLoader__.load({
           document.head.appendChild(el)
           return () => el.remove()
         })
-
-        const diag = { at: new Date().toISOString(), probe: {}, registered: {}, errors: [] }
 
         try {
           const locale = ctx.get('locale')
@@ -3002,9 +3313,8 @@ window.__ModuleLoader__.load({
             ctx.slots.inject('conversation.chat.commandview', () =>
               ctx.slots.register({ name: 'conversation.chat.commandview', key }, MemoryCommandCard),
             )
-            diag.registered[`card:${key}`] = true
           } catch (error) {
-            diag.errors.push(`card:${key}: ${error?.message ?? error}`)
+            console.error(`[workspace-memory] 命令卡 ${key} 注册失败`, error)
           }
         }
 
@@ -3012,47 +3322,30 @@ window.__ModuleLoader__.load({
           ctx.slots.inject('conversation.chat.commandview', () =>
             ctx.slots.register({ name: 'conversation.chat.commandview', key: 'memory_list' }, MemoryListCommandCard),
           )
-          diag.registered.listCard = true
         } catch (error) {
-          diag.errors.push(`listCard: ${error?.message ?? error}`)
+          console.error('[workspace-memory] memory_list 卡片注册失败', error)
         }
 
         const MAX_ATTEMPTS = 10
         const RETRY_MS = 150
         let attempts = 0
 
-        const reportDiag = () => {
-          try {
-            fetch(DIAG_URL, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify(diag),
-            }).catch(() => {})
-          } catch {
-            // 回执失败不影响插件本身
-          }
-        }
-
         const tryRegisterTab = () => {
+          if (disposed) return
           attempts += 1
 
           let tabs = null
           try {
             tabs = ctx.get('sidebarRightTabs')
           } catch (error) {
-            diag.errors.push(`get(sidebarRightTabs): ${error?.message ?? error}`)
+            console.error('[workspace-memory] get(sidebarRightTabs) 失败', error)
           }
-
-          diag.hasTabs = Boolean(tabs)
-          diag.hasTabsRegister = Boolean(tabs && typeof tabs.register === 'function')
-          diag.attempts = attempts
 
           if (!tabs || typeof tabs.register !== 'function') {
             if (attempts >= MAX_ATTEMPTS) {
-              diag.errors.push(`sidebarRightTabs 重试 ${MAX_ATTEMPTS} 次仍不可用，记忆面板未注册`)
-              reportDiag()
+              console.error(`[workspace-memory] sidebarRightTabs 重试 ${MAX_ATTEMPTS} 次仍不可用，记忆面板未注册`)
             } else {
-              setTimeout(tryRegisterTab, RETRY_MS)
+              retryTimer = setTimeout(tryRegisterTab, RETRY_MS)
             }
             return
           }
@@ -3065,21 +3358,17 @@ window.__ModuleLoader__.load({
                 title: () => t('tab.title'),
               }),
             )
-            diag.registered.tabType = true
           } catch (error) {
-            diag.errors.push(`tabs.register: ${error?.message ?? error}`)
+            console.error('[workspace-memory] tabs.register 失败', error)
           }
 
           try {
             ctx.slots.inject('sidebar.right.pane.tab', () =>
-              ctx.slots.register({ name: 'sidebar.right.pane.tab', key: TAB_ID }, MemoryPanel),
+              ctx.slots.register({ name: 'sidebar.right.pane.tab', key: TAB_ID }, MemoryPanelRoot),
             )
-            diag.registered.tabBody = true
           } catch (error) {
-            diag.errors.push(`tabBody: ${error?.message ?? error}`)
+            console.error('[workspace-memory] 面板组件注册失败', error)
           }
-
-          reportDiag()
         }
 
         tryRegisterTab()
