@@ -11,11 +11,21 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { EventEmitter } from 'node:events'
 import { makeHost, makeReporter, snapshotTree } from './fake-host.mjs'
 
 const mod = await import('../index.js')
 const { check, section, summary } = makeReporter()
 const API = '/api/dsh-workspace-memory'
+
+// 整个文件都不许真的启动进程：open-agents 一旦漏过闸门，会在用户桌面上弹出编辑器/终端
+const launches = []
+const restoreSpawn = mod.setSpawnForTests((command, args) => {
+  launches.push([command, ...args].join(' '))
+  const child = new EventEmitter()
+  child.unref = () => {}
+  return child
+})
 
 const AGENTS = ['# 规则', '', '## 1. Alpha', '', 'alpha body', '', '## 2. Beta', '', 'beta body', ''].join('\n')
 
@@ -233,5 +243,10 @@ section('/diag 已移除（它的开关 enableDiagEndpoint 也不再存在）')
     host.cleanup()
   }
 }
+
+
+section('全程没有启动任何外部进程')
+check('launch 次数为 0', launches.length === 0, JSON.stringify(launches))
+restoreSpawn()
 
 summary()

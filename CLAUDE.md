@@ -66,6 +66,7 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 - **id → 路径一律走 `idFile(dir, id)`**（内含 `isSafeId` + 包含性检查），写文件一律走 `writeFileAtomic`，frontmatter 一律走 `serializeFrontmatter`（歧义值 JSON 加引号，与 `parseFrontmatter` 互逆）。直接 `path.join(dir, \`${id}.md\`)` 曾让 `memory_forget` 能删掉 `~/.dsh/AGENTS.md`。只改 `hits/lastHit` 这类元数据时用 `withFrontmatterFields` 按行修补，不要整份重写。
 - **HTTP 路由**用 `apply()` 里的 `getRoute` / `postRoute` / `replyOf` 包装：POST 强制 `application/json`（415），抛 `RequestError(status, reason, msg)` 表达可预期的失败，reason → 状态码在 `REASON_STATUS`。客户端的 `KNOWN_REASONS` 与 ZH/EN 的 `reason.*` 文案要同步加（`test/client-logic.test.mjs` 会查）。
 - **AGENTS.md 按行处理时先算 `fenceMask(lines)`**，围栏代码里的 `#` 不是标题。只有 `## N.` / `### N.M` 算编号。
+- **测试绝不能真的启动进程**：会走到 `openAgentsFile` 的测试先 `mod.setSpawnForTests(假实现)`，只断言命令行。2026-11-11 有条测试用 `cmd /c start AGENTS.bat` 验证启动，每跑一次 `npm test` 就在用户桌面上留下一个终端窗口。
 - **测试会写真实的 `~/.dsh/AGENTS.md`**：`apply(ctx, rawConfig)` 第一行就 `configure(rawConfig)`，所以「先 `configure()` 再 `apply()`」等于重置为默认路径。配置必须经 `apply(ctx, { agentsFile: 临时路径, ... })` 传入；凡涉及 AGENTS.md 的测试都要像 `test/scope-routing.test.mjs` 那样前后快照比对真实文件。
 - **新增配置键**：加进 `DEFAULT_CONFIG` 还不够，必须同时进 `STRING_KEYS` / `BOOLEAN_KEYS` / `NUMERIC_RULES` 之一，否则被静默忽略；坏值也会静默回落默认值，所以数值下限要容得下测试用值，并补一条「设置后读出来」的断言。
 - **工具返回值不能含 `undefined` / `NaN` / `Infinity`**：宿主报 `value is not lossless JSON`，但副作用已经发生，调用方重试会造成重复写入。用条件展开 `...(x ? { x } : {})`。

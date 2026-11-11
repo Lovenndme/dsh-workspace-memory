@@ -2161,6 +2161,23 @@ export function resetEditorCache() {
   editorCache = null
 }
 
+const realSpawn = (command, args, options) => spawn(command, args, options)
+let spawnImpl = realSpawn
+
+/**
+ * 测试用：替换真正的进程启动，返回还原函数。
+ *
+ * 测试绝不能真的启动编辑器或 `cmd /c start`——在 Windows 上那会在用户桌面上弹出窗口
+ * （2026-11-11 一个测试用 `start AGENTS.bat` 验证命令行，每跑一次就留下一个终端窗口）。
+ */
+export function setSpawnForTests(fn) {
+  const previous = spawnImpl
+  spawnImpl = typeof fn === 'function' ? fn : realSpawn
+  return () => {
+    spawnImpl = previous
+  }
+}
+
 /**
  * 启动一个不等待的子进程。
  *
@@ -2168,7 +2185,7 @@ export function resetEditorCache() {
  * 而 try/catch 只接得住同步抛出——会把宿主进程带崩。
  */
 function launchDetached(command, args, options = {}) {
-  const child = spawn(command, args, { detached: true, stdio: 'ignore', ...options })
+  const child = spawnImpl(command, args, { detached: true, stdio: 'ignore', ...options })
   child.on('error', (error) => console.error(`[workspace-memory] 打开 AGENTS.md 失败：${error.message}`))
   child.unref()
 }

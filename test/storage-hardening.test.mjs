@@ -12,6 +12,7 @@
  * 全部使用隔离临时目录；AGENTS.md 一律指向临时文件，绝不碰真实的 ~/.dsh。
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -645,14 +646,23 @@ console.log('\n== detectEditors：记忆化；配置变了会重新探测 ==')
   }
 }
 
+// 这里的测试**绝不真的启动进程**：用 setSpawnForTests 换成假的子进程。
+// 以前有一条用 `start AGENTS.bat` 验证命令行，每跑一次就在用户桌面上留下一个终端窗口。
+
 console.log('\n== openAgentsFile：子进程启动失败不会变成未捕获异常 ==')
 {
   const env = makeEnv()
   const logged = []
   const originalError = console.error
   console.error = (...args) => logged.push(args.join(' '))
+  // 假子进程：像真的 spawn 一样，启动失败是在下一拍**异步**发出 'error'
+  const restore = mod.setSpawnForTests(() => {
+    const child = new EventEmitter()
+    child.unref = () => {}
+    setImmediate(() => child.emit('error', Object.assign(new Error('spawn EACCES'), { code: 'EACCES' })))
+    return child
+  })
   try {
-    // editorExe 指向一个**存在但不可执行**的路径（目录）：existsSync 通过，spawn 异步报错
     mod.configure({ agentsFile: env.agentsFile, editorExe: env.root })
     mod.resetEditorCache()
     let uncaught = null
@@ -662,36 +672,52 @@ console.log('\n== openAgentsFile：子进程启动失败不会变成未捕获异
     process.on('uncaughtException', onUncaught)
     const result = mod.openAgentsFile('')
     check('同步返回（异步错误另行处理）', result.ok === true && result.editorId === 'config', JSON.stringify(result))
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await new Promise((resolve) => setTimeout(resolve, 50))
     process.off('uncaughtException', onUncaught)
     check('进程没有收到未捕获异常', uncaught === null, String(uncaught))
     check('错误被记录而不是吞掉', logged.some((line) => line.includes('打开 AGENTS.md 失败')), JSON.stringify(logged))
   } finally {
+    restore()
     console.error = originalError
     mod.resetEditorCache()
     env.cleanup()
   }
 }
 
-if (process.platform === 'win32') {
-  console.log('\n== openAgentsFile 的系统默认分支真的能启动文件（回归：旧写法 `start "" "\\"file\\""` 从不启动）==')
+console.log('\n== openAgentsFile 系统默认分支的命令行（回归：旧写法 `start "" "\\"file\\""` 从不启动）==')
+{
   const env = makeEnv()
+  const calls = []
+  const restore = mod.setSpawnForTests((command, args, options) => {
+    calls.push({ command, args, options })
+    const child = new EventEmitter()
+    child.unref = () => {}
+    return child
+  })
   try {
-    // 用一个会写标记文件的 .bat 当「AGENTS.md」：start 能启动它就说明命令行拼对了
-    const marker = path.join(env.root, 'launched.txt')
-    const bat = path.join(env.root, 'dir with space', 'AGENTS.bat')
-    mkdirSync(path.dirname(bat), { recursive: true })
-    writeFileSync(bat, `@echo off\r\necho ran> "${marker}"\r\n`, 'utf8')
-    mod.configure({ agentsFile: bat })
+    const file = path.join(env.root, 'dir with space', 'AGENTS.md')
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, '# x\n', 'utf8')
+    mod.configure({ agentsFile: file })
+    mod.resetEditorCache()
     const result = mod.openAgentsFile('system')
     check('返回 system-default', result.ok === true && result.editorId === 'system', JSON.stringify(result))
-    let launched = false
-    for (let i = 0; i < 40 && !launched; i += 1) {
-      launched = existsSync(marker)
-      if (!launched) await new Promise((resolve) => setTimeout(resolve, 100))
+    check('只启动了一次', calls.length === 1, JSON.stringify(calls))
+    const call = calls[0] ?? {}
+    if (process.platform === 'win32') {
+      // 2026-11-11 用临时脚本实测过：这个形态在路径含空格时也能打开；参数里自己加引号的旧写法打不开
+      check(
+        'cmd /c start "" <原样路径>，不自己加引号',
+        call.command === 'cmd' && JSON.stringify(call.args) === JSON.stringify(['/c', 'start', '', file]),
+        JSON.stringify(call),
+      )
+    } else {
+      check('xdg-open <路径>', call.command === 'xdg-open' && JSON.stringify(call.args) === JSON.stringify([file]), JSON.stringify(call))
     }
-    check('文件确实被启动了（路径含空格也行）', launched)
+    check('detached 且不继承输出', call.options?.detached === true && call.options?.stdio === 'ignore', JSON.stringify(call.options))
   } finally {
+    restore()
+    mod.resetEditorCache()
     env.cleanup()
   }
 }
