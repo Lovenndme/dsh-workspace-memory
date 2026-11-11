@@ -146,9 +146,6 @@ const DEFAULT_CONFIG = {
   maxTags: 20,
   maxTagChars: 40,
 
-  /** 诊断端点。默认关：它是给「没有浏览器控制」时排查用的，不该常驻。 */
-  enableDiagEndpoint: false,
-
   /** 自动抽取（阶段 2）。默认关，打开后才会在回合收尾跑 LLM 抽取。 */
   enableExtraction: false,
   extractMaxPerTurn: 3,
@@ -333,7 +330,7 @@ const NUMERIC_RULES = {
   historyLimit: [0, 200],
 }
 
-const BOOLEAN_KEYS = ['enableDiagEndpoint', 'enableExtraction', 'duplicateCheck', 'pathsHint', 'prefetchRecall']
+const BOOLEAN_KEYS = ['enableExtraction', 'duplicateCheck', 'pathsHint', 'prefetchRecall']
 
 /**
  * 纯字符串选项（空串表示「用默认值」）。
@@ -451,8 +448,27 @@ export function encodeProjectPath(absPath) {
   return body ? `--${body}--` : '--'
 }
 
-/** 已注册的 DSH 工作区根路径。apply() 时抓一次，供同步解析使用。 */
+/** 已注册的 DSH 工作区根路径，供同步解析使用。由 refreshWorkspaceRoots 维护。 */
 let workspaceRoots = []
+
+/**
+ * 重新读一遍宿主的工作区注册表（`list()` 是同步的内存列表，读一次很便宜）。
+ *
+ * 只在 apply 时抓一次有两个坑：插件加载之后才注册的工作区永远看不到；
+ * 加载时注册表还没填好，整个进程生命周期里每个会话都会落到「以 cwd 为键」的另一个库。
+ * 读不到（没有注册表、抛错、返回的不是数组）就保持上一次的结果，不清空。
+ */
+export function refreshWorkspaceRoots(ctx) {
+  try {
+    const list = ctx.get?.('workspaceRegistry')?.list?.()
+    if (Array.isArray(list)) {
+      workspaceRoots = list.map((workspace) => workspace?.path).filter((p) => typeof p === 'string' && p)
+    }
+  } catch {
+    // 保持上一次的结果
+  }
+  return workspaceRoots
+}
 
 /**
  * 项目根：取「包含 cwd 的最长已注册工作区路径」，没有已注册工作区就退回 cwd。
@@ -2205,6 +2221,27 @@ export function openAgentsFile(editorId) {
  * 也保证正文不会被误粘成一整篇文档。
  */
 
+/** 手写文件里的数字字段可能是任何东西；NaN / Infinity 进了工具输出就不是 lossless JSON，宿主会整条拒掉。 */
+const finiteNumber = (value, fallback = 0) => {
+  const number = Number(value ?? fallback)
+  return Number.isFinite(number) ? number : fallback
+}
+
+/** 单行字段（标题、摘要、标签、路径）里不允许出现的行分隔符。 */
+const LINE_BREAK = /[\r\n\u{2028}\u{2029}]/u
+
+/**
+ * asciiSlug 的无兜底版：清洗后什么都不剩就返回空串，由调用方决定怎么办。
+ * asciiSlug 在这种情况下会编一个 `memory-<时间戳>`，用来「校验」会让非法输入永远通过。
+ */
+const cleanSlug = (input) =>
+  String(input ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/, '')
+
 /**
  * 校验 UI 提交的编辑，并归一化成可落盘的值。
  *
@@ -2230,18 +2267,21 @@ export function validateMemoryPatch(input) {
     } else {
       const title = input.title.trim()
       if (title.length === 0) errors.push('title: 不能为空')
+      else if (LINE_BREAK.test(title)) errors.push('title: 不能包含换行（它是单行字段）')
       else if (title.length > CONFIG.maxTitleChars) errors.push(`title: 不能超过 ${CONFIG.maxTitleChars} 字符（当前 ${title.length}）`)
       else value.title = title
     }
   }
 
-  // 文件名必须是英文 slug：索引行要求「英文在前、中文说明在后」
+  // 文件名必须是英文 slug：索引行要求「英文在前、中文说明在后」。
+  // 含非 ASCII 字符一律拒绝——asciiSlug 会把它们悄悄丢掉（甚至整个换成 memory-<时间戳>），
+  // 用户以为改成了自己输入的名字，实际文件名面目全非。
   if (input.slug !== undefined) {
     if (typeof input.slug !== 'string') {
       errors.push('slug: 必须是字符串')
     } else {
-      const normalized = asciiSlug(input.slug)
-      if (!/^[a-z0-9-]+$/.test(normalized) || normalized.length < 2) {
+      const normalized = cleanSlug(input.slug)
+      if (/[^\x00-\x7f]/.test(input.slug) || normalized.length < 2) {
         errors.push('slug: 只能包含小写英文字母、数字与连字符')
       } else {
         value.slug = normalized
@@ -2255,7 +2295,9 @@ export function validateMemoryPatch(input) {
       errors.push('description: 必须是字符串')
     } else {
       const description = input.description.trim()
-      if (description.length > MAX_DESCRIPTION_CHARS) {
+      if (LINE_BREAK.test(description)) {
+        errors.push('description: 不能包含换行——它就是索引里的那一行')
+      } else if (description.length > MAX_DESCRIPTION_CHARS) {
         errors.push(`description: 不能超过 ${MAX_DESCRIPTION_CHARS} 字符（当前 ${description.length}）——它就是索引里的那一行`)
       } else {
         value.description = description
@@ -2296,6 +2338,10 @@ export function validateMemoryPatch(input) {
       for (const raw of input.tags) {
         const tag = raw.trim()
         if (!tag) continue
+        if (LINE_BREAK.test(tag)) {
+          errors.push('tags: 标签不能包含换行')
+          break
+        }
         if (tag.length > CONFIG.maxTagChars) {
           errors.push(`tags: 单个标签不能超过 ${CONFIG.maxTagChars} 字符（"${tag.slice(0, 20)}…"）`)
           break
@@ -2321,6 +2367,8 @@ export function validateMemoryPatch(input) {
   if (input.paths !== undefined) {
     if (!Array.isArray(input.paths) || input.paths.some((p) => typeof p !== 'string')) {
       errors.push('paths: 必须是字符串数组')
+    } else if (input.paths.some((p) => LINE_BREAK.test(p.trim()))) {
+      errors.push('paths: 路径不能包含换行')
     } else {
       value.paths = input.paths.map((p) => p.trim()).filter(Boolean)
     }
@@ -2341,9 +2389,9 @@ function toUiShape(item) {
     status: item.meta.status ?? 'confirmed',
     tags: Array.isArray(item.meta.tags) ? item.meta.tags : [],
     paths: Array.isArray(item.meta.paths) ? item.meta.paths : [],
-    confidence: Number(item.meta.confidence ?? 0.8),
+    confidence: finiteNumber(item.meta.confidence, 0.8),
     // 被召回次数与最近一次命中，用于判断哪条是死条目
-    hits: Number(item.meta.hits ?? 0),
+    hits: finiteNumber(item.meta.hits, 0),
     lastHit: item.meta.lastHit ?? null,
     created: item.meta.created ?? null,
     modified: item.meta.modified ?? null,
@@ -2397,15 +2445,38 @@ async function applyMemoryPatch(memoryDir, id, patch) {
   }
 }
 
-/** 读请求体（限制 1 MiB，防止误发大文件把宿主拖住）。 */
+/** 带 HTTP 状态码与原因码的请求错误：路由的统一 catch 据此回应，不再一律 400。 */
+class RequestError extends Error {
+  constructor(status, reason, message) {
+    super(message)
+    this.status = status
+    this.reason = reason
+  }
+}
+
+/** 业务失败原因码 → HTTP 状态。表里没有的失败由路由给默认状态（400 / 404）。 */
+const REASON_STATUS = { 'invalid-id': 400, 'invalid-index': 400, 'section-moved': 409, 'library-full': 409 }
+
+/**
+ * 读 JSON 请求体：只收 `Content-Type: application/json`，体积限制 1 MiB。
+ *
+ * Content-Type 闸门是 CSRF 防线：`text/plain` / 表单这类跨站「简单请求」不触发 CORS 预检，
+ * 任何网页都能直接发给本地路由；而 `application/json` 会触发预检，宿主不放行就发不出去。
+ * 所以不是 JSON 的写请求一律 415，不看内容。
+ */
 function readJsonBody(req, limitBytes = 1024 * 1024) {
   return new Promise((resolve, reject) => {
+    const type = String(req.headers?.['content-type'] ?? '').split(';')[0].trim().toLowerCase()
+    if (type !== 'application/json') {
+      reject(new RequestError(415, 'unsupported-media-type', '只接受 Content-Type: application/json'))
+      return
+    }
     const chunks = []
     let total = 0
     req.on('data', (chunk) => {
       total += chunk.length
       if (total > limitBytes) {
-        reject(new Error(`请求体超过 ${limitBytes} 字节`))
+        reject(new RequestError(413, 'body-too-large', `请求体超过 ${limitBytes} 字节`))
         req.destroy()
         return
       }
@@ -2417,7 +2488,7 @@ function readJsonBody(req, limitBytes = 1024 * 1024) {
       try {
         resolve(JSON.parse(text))
       } catch {
-        reject(new Error('请求体不是合法 JSON'))
+        reject(new RequestError(400, 'invalid-json', '请求体不是合法 JSON'))
       }
     })
     req.on('error', reject)
@@ -2493,27 +2564,51 @@ export function rebuildIndex(memoryDir) {
   return { count: seen.size, lineCount, byteCount }
 }
 
-/** 读索引正文，受行数/字节上限约束。永不抛异常。 */
+/** 索引里一条记忆占一行，行首固定是 `- [`（见 rebuildIndex）。 */
+const isIndexEntry = (line) => line.startsWith('- [')
+
+/** rebuildIndex 写在文件末尾的超限警告的首行。注入时不原样用它，见 readIndexForInjection。 */
+const INDEX_FILE_WARNING = 'WARNING: index over its read limit'
+
+/**
+ * 读索引正文，受行数/字节上限约束。永不抛异常。
+ *
+ *   · 一条记忆都没有（只剩标题）→ 返回空串，调用方就不注入这一段，省下每轮一段无用文字
+ *   · 超限 → 截到上限内，并在末尾附一行警告，写明省略了多少条。警告的预算先扣出来，
+ *     所以它自己永远放得下——截断不再是静默的。
+ *     （文件里 rebuildIndex 写的那段警告在文件末尾，正好落在截断线之外，注入不了，所以这里重新生成。）
+ */
 function readIndexForInjection(memoryDir) {
   try {
     const file = indexPath(memoryDir)
     if (!existsSync(file)) return ''
-    const raw = readFileSync(file, 'utf8')
-    if (Buffer.byteLength(raw, 'utf8') <= CONFIG.indexMaxBytes) {
-      const lines = raw.split(/\r?\n/)
-      return (lines.length <= CONFIG.indexMaxLines ? lines : lines.slice(0, CONFIG.indexMaxLines)).join('\n')
-    }
-    // 超字节上限：按行累加，截到上限为止
+    let lines = readFileSync(file, 'utf8').split(/\r?\n/)
+    const warned = lines.findIndex((line) => line.startsWith(INDEX_FILE_WARNING))
+    if (warned >= 0) lines = lines.slice(0, warned)
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop()
+    const total = lines.filter(isIndexEntry).length
+    if (total === 0) return ''
+
+    const maxLines = CONFIG.indexMaxLines
+    const maxBytes = CONFIG.indexMaxBytes
+    const sizeOf = (list) => Buffer.byteLength(`${list.join('\n')}\n`, 'utf8')
+    if (lines.length <= maxLines && sizeOf(lines) <= maxBytes) return lines.join('\n')
+
+    const warning = (omitted) =>
+      `[WARNING] ${omitted} of ${total} memory entries are NOT listed above (index limit: ${maxLines} lines / ${maxBytes} bytes). ` +
+      'Use memory_recall to search for them, and tell the user the library needs trimming (delete or merge stale memories).'
+    // 按「全部被省略」的最坏情形（数字位数最多）给警告留位置：一个空行 + 一行警告
+    const reserve = Buffer.byteLength(`\n${warning(total)}\n`, 'utf8')
     const kept = []
     let bytes = 0
-    for (const line of raw.split(/\r?\n/)) {
+    for (const line of lines) {
       const size = Buffer.byteLength(`${line}\n`, 'utf8')
-      if (bytes + size > CONFIG.indexMaxBytes) break
+      if (kept.length + 3 > maxLines || bytes + size + reserve > maxBytes) break
       kept.push(line)
       bytes += size
-      if (kept.length >= CONFIG.indexMaxLines) break
     }
-    return kept.join('\n')
+    const omitted = total - kept.filter(isIndexEntry).length
+    return omitted > 0 ? [...kept, '', warning(omitted)].join('\n') : kept.join('\n')
   } catch {
     return ''
   }
@@ -2650,11 +2745,45 @@ function saveVectors(memoryDir, payload) {
 }
 
 /**
+ * 每条记忆的检索派生数据：索引文本、内容哈希、规范化后的文本。
+ * 挂在记忆对象上缓存（listMemories 在文件没变时返回同一个对象），所以每次召回
+ * 不用对全部记忆重新拼文本、算哈希、转小写。
+ */
+const searchCache = new WeakMap()
+
+function searchDataOf(item) {
+  let data = searchCache.get(item)
+  if (!data) {
+    const text = indexTextOf(item)
+    data = { text, hash: hashText(text), hay: foldText(text) }
+    searchCache.set(item, data)
+  }
+  return data
+}
+
+/**
+ * 向量索引是否与磁盘上的记忆一致：每条记忆都有哈希相同的向量，
+ * 或者「这个哈希下确实嵌不出向量」（leanvec 对某些文字返回 null）的记录。
+ * 手改过的文件、别的进程写入的文件、还没建过的索引都会判为不一致。
+ */
+function vectorsCurrent(stored, items) {
+  if (!stored) return false
+  const hashes = new Map(stored.entries.map((entry) => [entry.id, entry.hash]))
+  return items.every((item) => {
+    const { hash } = searchDataOf(item)
+    return hashes.get(item.id) === hash || stored.skipped?.get(item.id) === hash
+  })
+}
+
+/**
  * 重建向量索引。只覆盖 memories/ —— 这是与上一代实现最关键的差别。
  *
  * **增量**：每条记忆算一个索引文本哈希，与旧索引里同 id 的哈希比对；
  * 相同就原样复用向量，只有变过的才重新 embed。
  * 实测（2026-11-01）全量重嵌 200 条要 608 ms，改成增量后改一条只需一次 embed。
+ *
+ * 嵌不出向量的条目（空文本、leanvec 不支持的文字、embed 抛错）记在 `skipped` 里（id → 哈希），
+ * 这样 recall 的一致性检查不会把它们当成「缺失」而每次都重建。
  *
  * 返回 { mode, indexed, reused, embedded }；leanvec 不可用时 mode='keyword' 且不抛。
  */
@@ -2669,11 +2798,14 @@ export async function rebuildVectors(memoryDir) {
   let reused = 0
   let embedded = 0
   const entries = []
+  const skipped = new Map()
 
   for (const item of items) {
-    const text = indexTextOf(item)
-    if (!text.trim()) continue
-    const hash = hashText(text)
+    const { text, hash } = searchDataOf(item)
+    if (!text.trim()) {
+      skipped.set(item.id, hash)
+      continue
+    }
 
     const prev = previousById.get(item.id)
     if (prev && prev.hash === hash && prev.vec) {
@@ -2684,42 +2816,84 @@ export async function rebuildVectors(memoryDir) {
 
     try {
       const vec = embedder.lv.embed(text)
-      if (!vec) continue // leanvec 对希腊/阿拉伯等文字返回 null，跳过即可
-      entries.push({ id: item.id, hash, vec })
-      embedded += 1
+      if (vec) {
+        entries.push({ id: item.id, hash, vec })
+        embedded += 1
+        continue
+      }
     } catch {
       // 单条失败不影响整批
     }
+    skipped.set(item.id, hash)
   }
 
-  saveVectors(memoryDir, { model: 'leanvec', dim: VECTOR_DIM, builtAt: new Date().toISOString(), entries })
+  saveVectors(memoryDir, { model: 'leanvec', dim: VECTOR_DIM, builtAt: new Date().toISOString(), entries, skipped })
   return { mode: 'hybrid', indexed: entries.length, reused, embedded }
 }
 
 /* --------------------------------------------------------------- 检索 */
 
-/** 点积即余弦（leanvec 输出已 L2 归一化）。 */function dot(a, b) {
+/** 点积即余弦（leanvec 输出已 L2 归一化）。 */
+function dot(a, b) {
   let sum = 0
   const n = Math.min(a.length, b.length)
   for (let i = 0; i < n; i += 1) sum += a[i] * b[i]
   return sum
 }
 
-/** 关键词评分：拉丁词 + 中文二元组，命中数 / 查询词数，归一到 0..1。 */
-export function keywordScore(query, text) {
-  const q = String(query).toLowerCase()
-  const hay = String(text).toLowerCase()
-  const terms = new Set()
-  for (const word of q.match(/[a-z0-9_]{2,}/g) ?? []) terms.add(word)
-  const cjk = q.match(/[\u4e00-\u9fff]+/g) ?? []
-  for (const run of cjk) {
-    if (run.length === 1) terms.add(run)
-    for (let i = 0; i + 1 < run.length; i += 1) terms.add(run.slice(i, i + 2))
+/**
+ * 中日韩文字（汉字、假名、谚文）：书写时不空格分词，所以按「字二元组 + 子串匹配」处理。
+ * 长音符 ー（U+30FC）的 Script 是 Common，要单列，否则「サーバー」会被它劈成几段。
+ */
+const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー]/u
+const CJK_RUN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}ー]+/gu
+const WORD_TERM = /[\p{L}\p{N}_]{2,}/gu
+const WORD_LETTER = /[\p{L}\p{N}]/u
+
+/** 检索用的规范化：NFC（`ü` 的组合写法与预组合写法等价）+ 小写。 */
+const foldText = (text) => String(text ?? '').normalize('NFC').toLowerCase()
+
+/** 把查询拆成两类词项：字母数字词（词首匹配）与 CJK 字二元组（子串匹配）。 */
+function queryTerms(query) {
+  const q = foldText(query)
+  const words = new Set()
+  const grams = new Set()
+  for (const run of q.match(CJK_RUN) ?? []) {
+    const chars = Array.from(run)
+    if (chars.length === 1) grams.add(chars[0])
+    for (let i = 0; i + 1 < chars.length; i += 1) grams.add(chars[i] + chars[i + 1])
   }
-  if (terms.size === 0) return 0
+  for (const word of q.replace(CJK_RUN, ' ').match(WORD_TERM) ?? []) words.add(word)
+  return { words, grams }
+}
+
+/**
+ * 词首匹配：term 出现处的前一个字符不能是（非 CJK 的）字母或数字。
+ * 只在词首才算命中：`ci` 不该命中 "specified"，`id` 不该命中 "valid"。
+ * 前缀仍然算（`deploy` 命中 "deployment"），下划线、连字符、斜杠、CJK 都当边界
+ * （所以 `recall` 命中 `memory_recall`，`pnpm` 命中「使用pnpm安装」）。
+ */
+function hasWordStart(hay, term) {
+  for (let at = hay.indexOf(term); at >= 0; at = hay.indexOf(term, at + 1)) {
+    if (at === 0) return true
+    const prev = hay[at - 1]
+    if (!WORD_LETTER.test(prev) || CJK_CHAR.test(prev)) return true
+  }
+  return false
+}
+
+function scoreTerms({ words, grams }, hay) {
+  const total = words.size + grams.size
+  if (total === 0) return 0
   let hits = 0
-  for (const term of terms) if (hay.includes(term)) hits += 1
-  return hits / terms.size
+  for (const word of words) if (hasWordStart(hay, word)) hits += 1
+  for (const gram of grams) if (hay.includes(gram)) hits += 1
+  return hits / total
+}
+
+/** 关键词评分：字母数字词（词首匹配）+ CJK 二元组，命中数 / 查询词数，归一到 0..1。 */
+export function keywordScore(query, text) {
+  return scoreTerms(queryTerms(query), foldText(text))
 }
 
 /**
@@ -2738,22 +2912,18 @@ export async function recall(memoryDir, query, limit = 5, options = {}) {
 
   const embedder = await resolveEmbedder()
   if (embedder) {
-    const stored = loadVectors(memoryDir)
-    const cache = stored && stored.entries.length > 0 ? stored : null
-    let entries = cache?.entries
-    if (!entries) {
-      // 索引缺失或为空：就地重建一次
-      await rebuildVectors(memoryDir)
-      entries = loadVectors(memoryDir)?.entries ?? []
-    }
+    // 向量索引只在「经由本插件写入」时才更新。手改文件、别的进程写入、还没建过索引时它会落后于磁盘，
+    // 所以每次召回先按内容哈希对账，缺的/旧的就增量补上（只重嵌变过的那几条）。
+    if (!vectorsCurrent(loadVectors(memoryDir), items)) await rebuildVectors(memoryDir)
+    const entries = loadVectors(memoryDir)?.entries ?? []
     try {
       const qvec = embedder.lv.embed(query)
       if (qvec) {
         mode = 'hybrid'
         for (const entry of entries) {
-          const item = byId.get(entry.id)
-          if (!item) continue // 记忆已删除，索引残留
-          vectorScores.set(entry.id, Math.max(0, dot(qvec, entry.vec)))
+          if (!byId.has(entry.id)) continue // 记忆已删除，索引残留
+          const cosine = dot(qvec, entry.vec)
+          vectorScores.set(entry.id, Number.isFinite(cosine) ? Math.max(0, cosine) : 0)
         }
       }
     } catch {
@@ -2761,9 +2931,10 @@ export async function recall(memoryDir, query, limit = 5, options = {}) {
     }
   }
 
+  const terms = queryTerms(query)
   const scored = []
   for (const item of items) {
-    const kw = keywordScore(query, indexTextOf(item))
+    const kw = scoreTerms(terms, searchDataOf(item).hay)
     const vec = vectorScores.get(item.id) ?? 0
     // 任一通道达到门槛才入选：向量重语义，关键词重字面，互补
     if (vec < CONFIG.minVectorScore && kw < CONFIG.minKeywordScore) continue
@@ -2774,7 +2945,8 @@ export async function recall(memoryDir, query, limit = 5, options = {}) {
   }
 
   scored.sort((a, b) => b.score - a.score)
-  let top = scored.slice(0, Math.max(1, Math.min(20, limit)))
+  const cap = Number.isFinite(Number(limit)) ? Number(limit) : 5
+  let top = scored.slice(0, Math.max(1, Math.min(20, Math.floor(cap))))
 
   // 总体积预算：不收窄单条正文（长内容该长），而是**少带一条**。
   // 条数按分数顺序装入，超出预算就截断列表并如实说明还有几条。
@@ -2828,25 +3000,78 @@ export async function findSimilarMemories(memoryDir, text, limit = 3) {
 }
 
 /**
+ * 路径统一成「段」：反斜杠当分隔符，空段（`//`、结尾 `/`）与 `.` 段丢掉。
+ * Windows 的路径不分大小写，所以按小写比（`caseInsensitive` 默认只在 win32 开）。
+ */
+function pathSegments(raw, caseInsensitive) {
+  const text = caseInsensitive ? raw.toLowerCase() : raw
+  return text.split(/[\\/]+/).filter((segment) => segment !== '' && segment !== '.')
+}
+
+const segmentGlobCache = new Map()
+
+/** 单段通配：`*` 匹配本段内任意字符（不跨 `/`，`*` 在这里可以是空串），其余字符按字面。 */
+function segmentMatches(pattern, segment) {
+  if (!pattern.includes('*')) return pattern === segment
+  let regex = segmentGlobCache.get(pattern)
+  if (!regex) {
+    const body = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')
+    regex = new RegExp(`^${body}$`)
+    if (segmentGlobCache.size > 500) segmentGlobCache.clear()
+    segmentGlobCache.set(pattern, regex)
+  }
+  return regex.test(segment)
+}
+
+/** 段序列通配匹配：`**` 匹配零段或多段，其余逐段比；线性回溯，不会指数爆炸。 */
+function segmentsMatch(pattern, segments) {
+  let p = 0
+  let s = 0
+  let star = -1
+  let mark = 0
+  while (s < segments.length) {
+    if (p < pattern.length && pattern[p] === '**') {
+      star = p
+      p += 1
+      mark = s
+    } else if (p < pattern.length && segmentMatches(pattern[p], segments[s])) {
+      p += 1
+      s += 1
+    } else if (star >= 0) {
+      p = star + 1
+      mark += 1
+      s = mark
+    } else {
+      return false
+    }
+  }
+  while (p < pattern.length && pattern[p] === '**') p += 1
+  return p === pattern.length
+}
+
+/**
  * 记忆里标注的 `paths` 是否命中一个真实文件路径。
  *
  * 约定（与写入时的人工标注一致）：
  *   · 相对工作区根写，例如 `dsh-profile-stats/client.js`、`.github/workflows/x.yml`
- *   · 支持 `*` 通配，但**不跨目录**（`*` 不匹配 `/`）
- *   · 命中判据是「touched 路径以该模式结尾」，所以绝对路径也能匹配
+ *   · 按**路径段**匹配，不按字符：`src/` 命中 `/ws/src/a.js`，不会命中 `/ws/mysrc/a.js`
+ *   · 判据是「touched 路径以该模式结尾」，所以绝对路径也能匹配；光写文件名（`index.js`）
+ *     命中任何目录下叫这个名字的文件，但必须是整段（`xindex.js` 不算）
+ *   · `*` 匹配一段内的任意字符、不跨目录；`**` 匹配零段或多段（`src/**` 命中 src 之下任意深度的文件）
+ *   · 结尾 `/` 表示该目录下的任何文件（至少再深一层）
+ *   · Windows 上不分大小写
  */
-export function pathMatches(memoryPath, touchedPath) {
-  const pattern = String(memoryPath ?? '').replace(/\\/g, '/').replace(/^\.\//, '').trim()
-  const target = String(touchedPath ?? '').replace(/\\/g, '/')
-  if (!pattern || !target) return false
-  // 结尾目录形式（`foo/`）表示该目录下的任何文件
-  if (pattern.endsWith('/')) return target.includes(`/${pattern}`) || target.includes(pattern)
-  const body = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')
-  try {
-    return new RegExp(`(^|/)${body}$`).test(target)
-  } catch {
-    return false
-  }
+export function pathMatches(memoryPath, touchedPath, options = {}) {
+  const caseInsensitive = options.caseInsensitive ?? process.platform === 'win32'
+  const rawPattern = String(memoryPath ?? '').trim()
+  const pattern = pathSegments(rawPattern, caseInsensitive)
+  const target = pathSegments(String(touchedPath ?? ''), caseInsensitive)
+  if (pattern.length === 0 || target.length === 0) return false
+  // 目录形式要求目录之下还有东西，且目录可以在路径中间；文件形式锚在末尾
+  return segmentsMatch(
+    /[\\/]$/.test(rawPattern) ? ['**', ...pattern, '*', '**'] : ['**', ...pattern],
+    target,
+  )
 }
 
 /**
@@ -2909,20 +3134,50 @@ export function memoriesForPaths(memoryDir, paths, limit = 3) {
 }
 
 /**
+ * 只改 frontmatter 里的 `key: value` 这一行（没有就追加在收尾的 `---` 之前），其余字节原样保留。
+ * 不整体重新序列化：手写的 YAML 块列表、注释、引号风格、行尾（CRLF）都不能因为「被召回一次」而改变。
+ * 没有 frontmatter 的文件返回 null——不碰它。
+ */
+function withFrontmatterFields(raw, fields) {
+  const bom = raw.charCodeAt(0) === 0xfeff ? '\u{FEFF}' : ''
+  const text = bom ? raw.slice(1) : raw
+  const match = /^---(\r?\n)([\s\S]*?)(\r?\n---)(?=\r?\n|$)/.exec(text)
+  if (!match) return null
+  const eol = match[1]
+  let section = match[2]
+  for (const [key, value] of Object.entries(fields)) {
+    let found = false
+    section = section.replace(new RegExp(`^[ \\t]*${key}[ \\t]*:.*$`, 'gm'), () => {
+      found = true
+      return `${key}: ${value}`
+    })
+    if (!found) section += `${eol}${key}: ${value}`
+  }
+  return `${bom}---${eol}${section}${match[3]}${text.slice(match[0].length)}`
+}
+
+/**
  * 给被召回的条目累加 hits / lastHit。
  *
  * 刻意**不重建 MEMORY.md**：命中次数不进索引，重建纯属浪费；
  * 也**不留历史**：这是元数据抖动而非内容变更，留档会把历史冲爆。
+ * 只改这两行（见 withFrontmatterFields），所以不会动到记忆的其它任何内容。
  */
 function recordHits(memoryDir, ids) {
   if (ids.length === 0) return
   const now = new Date().toISOString()
   for (const id of ids) {
     try {
-      const file = path.join(memoriesPath(memoryDir), `${id}.md`)
-      if (!existsSync(file)) continue
-      const { data, body } = parseFrontmatter(readFileSync(file, 'utf8'))
-      writeFileAtomic(file, serializeFrontmatter({ ...data, hits: Number(data.hits ?? 0) + 1, lastHit: now }, body))
+      const file = idFile(memoriesPath(memoryDir), id)
+      if (!file || !existsSync(file)) continue
+      const raw = readFileSync(file, 'utf8')
+      const previous = Number(parseFrontmatter(raw).data.hits)
+      const patched = withFrontmatterFields(raw, {
+        hits: (Number.isFinite(previous) && previous >= 0 ? previous : 0) + 1,
+        lastHit: now,
+      })
+      if (patched === null) continue
+      writeFileAtomic(file, patched)
       memoryCache.delete(file)
     } catch {
       // 计数失败不影响检索本身
@@ -2983,7 +3238,9 @@ function memoryDirOf(ctx, { agent, sessionId, useInitiator = false } = {}) {
     }
   }
 
-  return cwd ? resolveMemoryDir(cwd) : null
+  if (!cwd) return null
+  refreshWorkspaceRoots(ctx)
+  return resolveMemoryDir(cwd)
 }
 
 /** 从请求 URL 上取 `?session=`。 */
@@ -2995,15 +3252,6 @@ function sessionIdOf(req) {
     return ''
   }
 }
-
-/**
- * 浏览器半区的能力自检回执。
- *
- * 客户端跑在浏览器里，控制台我看不到；客户端 ctx 能拿到哪些服务，只有它自己知道。
- * 所以让它在 apply 时把探测结果 POST 回来，宿主存一份，用 GET 读。
- * 这不是产品功能，是给「没有浏览器控制」这类环境用的诊断通道。
- */
-let lastClientDiag = null
 
 /* ---------------------------------------------------------------- 工具输出 */
 
@@ -3028,15 +3276,9 @@ export function apply(ctx, rawConfig) {
     for (const issue of resolved.issues) console.error(`[workspace-memory] config: ${issue}`)
   }
 
-  // 抓一次已注册工作区根路径：记忆库的「项目」就是这个工作区，
-  // 而不是每个子项目各建一个（那些子目录各自是独立 git 仓库）。
-  try {
-    const registry = ctx.get?.('workspaceRegistry')
-    const list = registry?.list?.() ?? []
-    workspaceRoots = list.map((workspace) => workspace?.path).filter((p) => typeof p === 'string' && p)
-  } catch {
-    workspaceRoots = []
-  }
+  // 记忆库的「项目」就是已注册的工作区，而不是每个子项目各建一个（那些子目录各自是独立 git 仓库）。
+  // 这里先读一次；之后每次解析记忆目录时 memoryDirOf 都会再读（见 refreshWorkspaceRoots）。
+  refreshWorkspaceRoots(ctx)
 
   /* —— 预取缓存：pre-step 里算好，注入时只读 —————————————————— */
   const prefetchCache = new Map() // agentId -> { turn, hits: [{id,title,score}] }
@@ -3210,6 +3452,8 @@ export function apply(ctx, rawConfig) {
       try {
         if (!CONFIG.pathsHint) return next()
         if (!result || result.isError) return next()
+        // 只给被接受的结果加料：被拒绝/拦截的结果原样放行，后面的策略还要读它
+        if (result.kind !== undefined && result.kind !== 'accept') return next()
         const toolName = String(exec?.name ?? '')
         // 记忆工具自己的结果不需要再提示记忆
         if (!toolName || toolName.startsWith('memory_')) return next()
@@ -3233,7 +3477,8 @@ export function apply(ctx, rawConfig) {
         const lines = fresh.map((hit) => `- ${hit.id} — ${hit.title}`)
         const hint = `\n\n[记忆] 这个文件有相关记忆（需要细节时调 memory_recall）：\n${lines.join('\n')}`
         const content = Array.isArray(result.content) ? result.content : []
-        return { kind: 'accept', content: [...content, { type: 'text', text: hint }] }
+        // 只替换 content，其余字段（value、元数据……）原样带上：后面的策略要靠它们改写或拦截
+        return { ...result, kind: 'accept', content: [...content, { type: 'text', text: hint }] }
       } catch {
         return next()
       }
@@ -3243,323 +3488,171 @@ export function apply(ctx, rawConfig) {
   /* —— 浏览器半区的数据接口 ——————————————————————————————————
    * 走宿主 HTTP 路由而不是包私有 RPC：工作区里 dsh-profile-stats 已经用这条路
    * 跑通，行为可预测，也不需要额外的 Remote/typert 声明。
-   * 只暴露两个端点，都是本包自己的命名空间，不与他人冲突。 */
+   * 全部在本包自己的命名空间下，不与他人冲突。
+   *
+   * 三道共用的闸门，路由本身不再各写一遍：
+   *   · 方法：GET 路由只收 GET/HEAD，写路由只收 POST（405）
+   *   · Content-Type：写路由只收 application/json（415，见 readJsonBody）
+   *   · session：记忆库相关路由必须带能反查出工作目录的 `?session=`（400），绝不回退到默认目录
+   * 业务代码只管返回 `{ status, payload }` 或抛 RequestError；其余异常一律 500，绝不抛进宿主。 */
   {
-    const LIST_PATH = '/api/dsh-workspace-memory/list'
-    const SAVE_PATH = '/api/dsh-workspace-memory/save'
+    const API = '/api/dsh-workspace-memory'
 
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: LIST_PATH,
-        handler: (req, res) => {
-          if (req.method !== 'GET' && req.method !== 'HEAD') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 GET'] })
-            return
-          }
-          try {
-            const memoryDir = memoryDirOf(ctx, { sessionId: sessionIdOf(req) })
-            if (!memoryDir) {
-              sendJson(res, 400, {
-                ok: false,
-                errors: ['无法确定工作区：请求缺少有效的 session 参数'],
-              })
-              return
-            }
-            const items = listMemories(memoryDir).map(toUiShape)
-            const drafts = listPending(memoryDir).map((item) => ({ ...toUiShape(item), status: 'draft' }))
-            sendJson(res, 200, {
-              ok: true,
-              root: memoryDir,
-              memories: items,
-              pending: drafts,
-              pendingEnabled: CONFIG.enableExtraction,
-            })
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            sendJson(res, 500, { ok: false, errors: [`读取记忆失败：${detail}`] })
-          }
-        },
+    const failure = (error) => {
+      const detail = error instanceof Error ? error.message : String(error)
+      return {
+        status: error instanceof RequestError ? error.status : 500,
+        payload: { ok: false, ...(error instanceof RequestError ? { reason: error.reason } : {}), errors: [detail] },
+      }
+    }
+
+    /** 业务结果 → 响应：成功 200；失败按原因码取状态，没有对应原因码的用 failStatus。 */
+    const replyOf = (result, failStatus = 400) => ({
+      status: result.ok ? 200 : (REASON_STATUS[result.reason] ?? failStatus),
+      payload: result,
+    })
+
+    const getRoute = (run) =>
+      async function handleGet(req, res) {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          sendJson(res, 405, { ok: false, errors: ['只接受 GET'] })
+          return
+        }
+        try {
+          const reply = await run(req)
+          sendJson(res, reply.status, reply.payload)
+        } catch (error) {
+          const reply = failure(error)
+          sendJson(res, reply.status, reply.payload)
+        }
+      }
+
+    const postRoute = (run) =>
+      async function handlePost(req, res) {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, errors: ['只接受 POST'] })
+          return
+        }
+        try {
+          const body = await readJsonBody(req)
+          const reply = await run(body, req)
+          sendJson(res, reply.status, reply.payload)
+        } catch (error) {
+          const reply = failure(error)
+          sendJson(res, reply.status, reply.payload)
+        }
+      }
+
+    /** 请求对应的记忆目录；session 查不到就是 400。 */
+    const memoryDirFor = (req) => {
+      const memoryDir = memoryDirOf(ctx, { sessionId: sessionIdOf(req) })
+      if (!memoryDir) throw new RequestError(400, 'no-session', '无法确定工作区：请求缺少有效的 session 参数')
+      return memoryDir
+    }
+
+    /** 请求体里的记忆 id；空或不安全（会逃出记忆目录）就是 400 invalid-id，不碰任何文件。 */
+    const memoryIdOf = (body) => {
+      const id = typeof body?.id === 'string' ? body.id.trim() : ''
+      if (!id) throw new RequestError(400, 'invalid-id', 'id: 不能为空')
+      if (!isSafeId(id)) throw new RequestError(400, 'invalid-id', 'id: 不合法')
+      return id
+    }
+
+    const register = (path, handler) => ctx.effect(() => ctx.webServer.register({ kind: 'exact', path, handler }))
+
+    register(
+      `${API}/list`,
+      getRoute((req) => {
+        const memoryDir = memoryDirFor(req)
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            root: memoryDir,
+            memories: listMemories(memoryDir).map(toUiShape),
+            pending: listPending(memoryDir).map((item) => ({ ...toUiShape(item), status: 'draft' })),
+            pendingEnabled: CONFIG.enableExtraction,
+          },
+        }
       }),
     )
 
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: SAVE_PATH,
-        handler: async (req, res) => {
-          if (req.method !== 'POST') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 POST'] })
-            return
-          }
-          try {
-            const body = await readJsonBody(req)
-            const id = typeof body?.id === 'string' ? body.id.trim() : ''
-            if (!id) {
-              sendJson(res, 400, { ok: false, errors: ['id: 不能为空'] })
-              return
-            }
-            const memoryDir = memoryDirOf(ctx, { sessionId: sessionIdOf(req) })
-            if (!memoryDir) {
-              sendJson(res, 400, {
-                ok: false,
-                errors: ['无法确定工作区：请求缺少有效的 session 参数'],
-              })
-              return
-            }
-            const result = await applyMemoryPatch(memoryDir, id, body?.patch ?? {})
-            sendJson(res, result.status, result)
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            sendJson(res, 400, { ok: false, errors: [detail] })
-          }
-        },
+    register(
+      `${API}/save`,
+      postRoute(async (body, req) => {
+        const memoryDir = memoryDirFor(req)
+        const result = await applyMemoryPatch(memoryDir, memoryIdOf(body), body?.patch ?? {})
+        return { status: result.status, payload: result }
       }),
     )
 
     // 待确认草稿的处置。与 /memory accept|reject 走同一套函数，只是换个入口，
     // 免得「命令能做的事界面做不到」或反过来出现两套逻辑。
-    const ACCEPT_PATH = '/api/dsh-workspace-memory/accept'
-    const REJECT_PATH = '/api/dsh-workspace-memory/reject'
-
-    const pendingAction = (action) =>
-      async function handlePendingAction(req, res) {
-        if (req.method !== 'POST') {
-          sendJson(res, 405, { ok: false, errors: ['只接受 POST'] })
-          return
-        }
-        try {
-          const body = await readJsonBody(req)
-          const id = typeof body?.id === 'string' ? body.id.trim() : ''
-          if (!id) {
-            sendJson(res, 400, { ok: false, errors: ['id: 不能为空'] })
-            return
-          }
-          const memoryDir = memoryDirOf(ctx, { sessionId: sessionIdOf(req) })
-          if (!memoryDir) {
-            sendJson(res, 400, { ok: false, errors: ['无法确定工作区：请求缺少有效的 session 参数'] })
-            return
-          }
-          const result = action === 'accept' ? await acceptPending(memoryDir, id) : rejectPending(memoryDir, id)
-          sendJson(res, result.ok ? 200 : 404, result)
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
-          sendJson(res, 400, { ok: false, errors: [detail] })
-        }
-      }
-
-    ctx.effect(() =>
-      ctx.webServer.register({ kind: 'exact', path: ACCEPT_PATH, handler: pendingAction('accept') }),
-    )
-    ctx.effect(() =>
-      ctx.webServer.register({ kind: 'exact', path: REJECT_PATH, handler: pendingAction('reject') }),
-    )
+    for (const action of ['accept', 'reject']) {
+      register(
+        `${API}/${action}`,
+        postRoute(async (body, req) => {
+          const memoryDir = memoryDirFor(req)
+          const id = memoryIdOf(body)
+          return replyOf(action === 'accept' ? await acceptPending(memoryDir, id) : rejectPending(memoryDir, id), 404)
+        }),
+      )
+    }
 
     /* —— 删除已确认的记忆 ——
      * 面板的「删除」按钮走这里。高置信度记忆是直接入库的，所以人必须能自己删掉记错的东西；
      * 删除走 deleteMemory，会先在 .memory-state/history/ 留一份，可回退。
      */
-    const FORGET_PATH = '/api/dsh-workspace-memory/forget'
-
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: FORGET_PATH,
-        handler: async (req, res) => {
-          if (req.method !== 'POST') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 POST'] })
-            return
-          }
-          try {
-            const body = await readJsonBody(req)
-            const id = typeof body?.id === 'string' ? body.id.trim() : ''
-            if (!id) {
-              sendJson(res, 400, { ok: false, errors: ['id: 不能为空'] })
-              return
-            }
-            const memoryDir = memoryDirOf(ctx, { sessionId: sessionIdOf(req) })
-            if (!memoryDir) {
-              sendJson(res, 400, { ok: false, errors: ['无法确定工作区：请求缺少有效的 session 参数'] })
-              return
-            }
-            if (!deleteMemory(memoryDir, id)) {
-              sendJson(res, 404, { ok: false, errors: [`找不到记忆：${id}`] })
-              return
-            }
-            const built = await rebuildVectors(memoryDir)
-            sendJson(res, 200, { ok: true, removed: id, vectorMode: built.mode, vectorCount: built.indexed })
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            sendJson(res, 400, { ok: false, errors: [detail] })
-          }
-        },
+    register(
+      `${API}/forget`,
+      postRoute(async (body, req) => {
+        const memoryDir = memoryDirFor(req)
+        const id = memoryIdOf(body)
+        if (!deleteMemory(memoryDir, id)) return { status: 404, payload: { ok: false, errors: [`找不到记忆：${id}`] } }
+        const built = await rebuildVectors(memoryDir)
+        return { status: 200, payload: { ok: true, removed: id, vectorMode: built.mode, vectorCount: built.indexed } }
       }),
     )
 
-    /* —— 全局 AGENTS.md：查看、搬迁、打开 —— */
+    /* —— 全局 AGENTS.md：查看、搬迁、打开、章节管理 ——
+     * 全局文件不属于任何工作区，面板读写它时不带 session，所以这些路由没有 session 闸门；
+     * 写路由靠上面的 Content-Type 闸门挡住跨站的简单请求。 */
+    register(
+      `${API}/agents`,
+      // 顺带把探测到的编辑器一起给出去，界面据此渲染「打开方式」下拉
+      getRoute(() => ({ status: 200, payload: { ok: true, agents: agentsStatus(), editors: detectEditors() } })),
+    )
 
-    const AGENTS_PATH = '/api/dsh-workspace-memory/agents'
-    const PROMOTE_PATH = '/api/dsh-workspace-memory/promote'
-    const OPEN_AGENTS_PATH = '/api/dsh-workspace-memory/open-agents'
-
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: AGENTS_PATH,
-        handler: (req, res) => {
-          if (req.method !== 'GET' && req.method !== 'HEAD') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 GET'] })
-            return
-          }
-          // 顺带把探测到的编辑器一起给出去，界面据此渲染「打开方式」下拉
-          sendJson(res, 200, { ok: true, agents: agentsStatus(), editors: detectEditors() })
-        },
+    register(
+      `${API}/promote`,
+      postRoute(async (body, req) => {
+        const memoryDir = memoryDirFor(req)
+        return replyOf(promoteToAgents(memoryDir, memoryIdOf(body)))
       }),
     )
 
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: PROMOTE_PATH,
-        handler: async (req, res) => {
-          if (req.method !== 'POST') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 POST'] })
-            return
-          }
-          try {
-            const body = await readJsonBody(req)
-            const id = typeof body?.id === 'string' ? body.id.trim() : ''
-            if (!id) {
-              sendJson(res, 400, { ok: false, errors: ['id: 不能为空'] })
-              return
-            }
-            const memoryDir = memoryDirOf(ctx, { sessionId: sessionIdOf(req) })
-            if (!memoryDir) {
-              sendJson(res, 400, { ok: false, errors: ['无法确定工作区：请求缺少有效的 session 参数'] })
-              return
-            }
-            const result = promoteToAgents(memoryDir, id)
-            sendJson(res, result.ok ? 200 : 400, result)
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            sendJson(res, 400, { ok: false, errors: [detail] })
-          }
-        },
-      }),
+    register(
+      `${API}/open-agents`,
+      postRoute(async (body) => replyOf(openAgentsFile(typeof body?.editor === 'string' ? body.editor : ''))),
     )
 
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: OPEN_AGENTS_PATH,
-        handler: async (req, res) => {
-          if (req.method !== 'POST') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 POST'] })
-            return
-          }
-          try {
-            const body = await readJsonBody(req)
-            const editor = typeof body?.editor === 'string' ? body.editor : ''
-            const result = openAgentsFile(editor)
-            sendJson(res, result.ok ? 200 : 400, result)
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            sendJson(res, 400, { ok: false, errors: [detail] })
-          }
-        },
-      }),
+    register(`${API}/agents/sections`, getRoute(() => ({ status: 200, payload: readAgentsDocument() })))
+
+    // `index` 原样交给 saveAgentsSection / deleteAgentsSection 校验（必须是真整数，不做字符串转换）；
+    // `expectedTitle` 是面板打开这一章时看到的标题，序号过期就返回 section-moved（409），不改错章。
+    register(
+      `${API}/agents/save-section`,
+      postRoute(async (body) =>
+        replyOf(saveAgentsSection(body?.index, { title: body?.title, body: body?.body, expectedTitle: body?.expectedTitle })),
+      ),
     )
-
-    /* —— 全局 AGENTS.md 的章节管理（面板「全局」页签）—— */
-    const AGENTS_SECTIONS_PATH = '/api/dsh-workspace-memory/agents/sections'
-    const AGENTS_SECTION_SAVE_PATH = '/api/dsh-workspace-memory/agents/save-section'
-    const AGENTS_SECTION_DELETE_PATH = '/api/dsh-workspace-memory/agents/delete-section'
-    const AGENTS_SECTION_ADD_PATH = '/api/dsh-workspace-memory/agents/add-section'
-
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: AGENTS_SECTIONS_PATH,
-        handler: (req, res) => {
-          if (req.method !== 'GET' && req.method !== 'HEAD') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 GET'] })
-            return
-          }
-          sendJson(res, 200, readAgentsDocument())
-        },
-      }),
+    register(
+      `${API}/agents/delete-section`,
+      postRoute(async (body) => replyOf(deleteAgentsSection(body?.index, { expectedTitle: body?.expectedTitle }))),
     )
-
-    // 三个写操作共用一套：读 body → 校验 → 执行 → 回新的大小
-    const agentsWrite = (action) =>
-      async function handleAgentsWrite(req, res) {
-        if (req.method !== 'POST') {
-          sendJson(res, 405, { ok: false, errors: ['只接受 POST'] })
-          return
-        }
-        try {
-          const body = await readJsonBody(req)
-          const result = action(body)
-          sendJson(res, result.ok ? 200 : 400, result)
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
-          sendJson(res, 400, { ok: false, errors: [detail] })
-        }
-      }
-
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: AGENTS_SECTION_SAVE_PATH,
-        handler: agentsWrite((body) => saveAgentsSection(body?.index, { title: body?.title, body: body?.body })),
-      }),
-    )
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: AGENTS_SECTION_DELETE_PATH,
-        handler: agentsWrite((body) => deleteAgentsSection(body?.index)),
-      }),
-    )
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: AGENTS_SECTION_ADD_PATH,
-        handler: agentsWrite((body) => appendAgentsSection({ title: body?.title, body: body?.body })),
-      }),
-    )
-
-    // 诊断：客户端把「apply 时探测到的服务与注册结果」回传到宿主，供无浏览器控制时排查。
-    const DIAG_PATH = '/api/dsh-workspace-memory/diag'
-
-    ctx.effect(() =>
-      ctx.webServer.register({
-        kind: 'exact',
-        path: DIAG_PATH,
-        handler: async (req, res) => {
-          // 默认关。这是排查用的后门，不该常驻；需要时在 config 里
-          // 打开 enableDiagEndpoint 并重载插件。
-          if (!CONFIG.enableDiagEndpoint) {
-            sendJson(res, 404, { ok: false, errors: ['diagnostic endpoint disabled'] })
-            return
-          }
-          if (req.method === 'GET' || req.method === 'HEAD') {
-            sendJson(res, 200, { ok: true, diag: lastClientDiag })
-            return
-          }
-          if (req.method !== 'POST') {
-            sendJson(res, 405, { ok: false, errors: ['只接受 GET / POST'] })
-            return
-          }
-          try {
-            lastClientDiag = await readJsonBody(req, 64 * 1024)
-            sendJson(res, 200, { ok: true })
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            sendJson(res, 400, { ok: false, errors: [detail] })
-          }
-        },
-      }),
+    register(
+      `${API}/agents/add-section`,
+      postRoute(async (body) => replyOf(appendAgentsSection({ title: body?.title, body: body?.body }))),
     )
   }
 
@@ -3595,7 +3688,9 @@ export function apply(ctx, rawConfig) {
             slug: {
               type: 'string',
               description:
-                'Short English kebab-case file name, e.g. "no-explanatory-text-in-ui". It becomes the file name and the index link text, so keep the index line English-led. Lowercase ASCII words joined by hyphens, no Chinese.',
+                'Short English kebab-case file name, e.g. "no-explanatory-text-in-ui". It becomes the file name and the index link text, so keep the index line English-led. Lowercase ASCII words joined by hyphens, no Chinese. ' +
+                'REQUIRED for project-scope writes whenever the title contains non-ASCII text (e.g. Chinese): without it nothing is saved and the call returns reason "needs-slug". ' +
+                'When superseding a memory, pass the old id as the slug to update it in place.',
             },
             title: { type: 'string', description: 'Human-readable title (may be Chinese). Not the file name.' },
             description: {
@@ -3657,7 +3752,11 @@ export function apply(ctx, rawConfig) {
           try {
             const memoryDir = memoryDirOf(ctx, { agent: exec?.agent })
             if (!memoryDir) return { text: '无法定位工作区记忆库：当前会话没有可用工作目录。' }
-            const confidence = typeof args.confidence === 'number' ? args.confidence : 0.8
+            // 自评置信度限在 0..1：超出范围的值（百分数、负数）写进文件会让面板与淘汰排序都读错
+            const confidence =
+              typeof args.confidence === 'number' && Number.isFinite(args.confidence)
+                ? Math.min(1, Math.max(0, args.confidence))
+                : 0.8
             const scope = args.scope === 'global' ? 'global' : 'project'
 
             // —— 全局：写 AGENTS.md（跨项目规则）——
@@ -3732,11 +3831,61 @@ export function apply(ctx, rawConfig) {
               }
             }
 
+            // —— 项目：先定下「文件名」和「要取代谁」，再谈置信度分流 ——
+            //
+            // 文件名是英文 slug（索引行要求英文在前）。标题含非 ASCII 字符又没给 slug 时，
+            // writeMemory 会退回「由标题派生」，得到中文文件名——真实库里 3 条有 2 条就是这样来的。
+            // 所以这里一个字都不写（连待确认队列也不进），让模型带着 slug 重来。
+            const slug = cleanSlug(args.slug)
+            if (!slug && /[^\x00-\x7f]/.test(String(args.title ?? ''))) {
+              return {
+                reason: 'needs-slug',
+                written: false,
+                text:
+                  'NOT written: the title is not plain ASCII and no usable English slug was given, so the memory would get a ' +
+                  'non-English file name. Nothing was saved. Call memory_remember again with the same arguments plus ' +
+                  'slug: a short English kebab-case name (lowercase ASCII words joined by hyphens), e.g. "no-explanatory-text-in-ui".' +
+                  (args.supersedes ? ' To update the memory you are superseding in place, pass its id as the slug.' : ''),
+              }
+            }
+
+            // 取代谁：先精确 id，再「唯一」的前缀。前缀匹配到多条就拒写——删错一条记忆比多问一句代价大得多。
+            let target
+            const wanted = String(args.supersedes ?? '').trim()
+            if (wanted) {
+              const items = listMemories(memoryDir)
+              target = items.find((row) => row.id === wanted)
+              if (!target) {
+                const byPrefix = items.filter((row) => row.id.startsWith(wanted))
+                if (byPrefix.length > 1) {
+                  const candidates = byPrefix.slice(0, 10).map((row) => ({ id: row.id, title: oneLine(row.meta?.title ?? row.id) }))
+                  return {
+                    reason: 'supersedes-ambiguous',
+                    written: false,
+                    candidates,
+                    text:
+                      `NOT written: "${wanted}" is a prefix of ${byPrefix.length} memories, so it is unclear which one to replace.\n\n` +
+                      `${candidates.map((row) => `  ${row.id}  ${row.title}`).join('\n')}\n\n` +
+                      'Call again with supersedes set to the exact id.',
+                  }
+                }
+                target = byPrefix[0]
+              }
+              if (!target) {
+                return {
+                  reason: 'supersedes-not-found',
+                  written: false,
+                  text: `No memory matches "${wanted}". Call memory_recall first to get the exact id.`,
+                }
+              }
+            }
+
             // 置信度分流：高置信度直接入库；不确定的进待确认，由人收下或丢弃。
             // 依据是 confidence 是模型自评——模型自己都说没把握的，不该绕过人的判断。
+            // 要取代谁带进草稿里：收下时才真正取代（acceptPending），否则新旧会并存。
             if (rememberRoute(confidence) === 'pending') {
               const pendingFile = writePending(memoryDir, {
-                slug: args.slug,
+                slug: slug || undefined,
                 title: args.title,
                 description: args.description,
                 body: args.body,
@@ -3745,6 +3894,7 @@ export function apply(ctx, rawConfig) {
                 paths: args.paths,
                 confidence,
                 scope: 'project',
+                supersedes: target?.id,
               })
               const pendingId = path.basename(pendingFile, '.md')
               return {
@@ -3754,26 +3904,14 @@ export function apply(ctx, rawConfig) {
                 text:
                   `Confidence ${confidence.toFixed(2)} is below the direct-write threshold ` +
                   `${CONFIG.directWriteConfidence.toFixed(2)}, so this was queued as pending ${pendingId} ` +
+                  `${target ? `(accepting it will replace ${target.id}) ` : ''}` +
                   'instead of entering the library. The human can accept or discard it in the memory panel.',
               }
             }
 
             // —— 写入前查重：多条并存会产生互相矛盾的记忆 ——
-            let supersedeId = ''
-            if (args.supersedes) {
-              const items = listMemories(memoryDir)
-              const target =
-                items.find((row) => row.id === String(args.supersedes)) ??
-                items.find((row) => row.id.startsWith(String(args.supersedes)))
-              if (!target) {
-                return {
-                  reason: 'supersedes-not-found',
-                  written: false,
-                  text: `No memory matches "${args.supersedes}". Call memory_recall first to get the exact id.`,
-                }
-              }
-              supersedeId = target.id
-            } else if (CONFIG.duplicateCheck && args.newMemory !== true) {
+            // 明确要取代某条时不查重（目标就是那条）。
+            if (!target && CONFIG.duplicateCheck && args.newMemory !== true) {
               const candidates = await findSimilarMemories(
                 memoryDir,
                 `${args.title} ${args.description ?? ''}`,
@@ -3800,14 +3938,14 @@ export function apply(ctx, rawConfig) {
 
             // —— 条数上限：索引每轮注入，条数就是常驻成本 ——
             // supersedes 是替换，不增加条数，不该被拦。
-            if (CONFIG.maxMemoryCount > 0 && !supersedeId) {
+            if (CONFIG.maxMemoryCount > 0 && !target) {
               const items = listMemories(memoryDir)
               if (items.length >= CONFIG.maxMemoryCount) {
                 // 按「最少被用、最久没读」排淘汰候选：这是现有数据里最接近「该删」的信号
                 const candidates = [...items]
                   .sort((a, b) => {
-                    const hitsA = Number(a.meta?.hits ?? 0)
-                    const hitsB = Number(b.meta?.hits ?? 0)
+                    const hitsA = finiteNumber(a.meta?.hits)
+                    const hitsB = finiteNumber(b.meta?.hits)
                     if (hitsA !== hitsB) return hitsA - hitsB
                     const readA = String(a.meta?.lastHit ?? a.meta?.modified ?? '')
                     const readB = String(b.meta?.lastHit ?? b.meta?.modified ?? '')
@@ -3816,9 +3954,10 @@ export function apply(ctx, rawConfig) {
                   .slice(0, 5)
                   .map((row) => ({
                     id: row.id,
-                    title: row.meta?.title ?? row.id,
-                    hits: Number(row.meta?.hits ?? 0),
-                    lastHit: row.meta?.lastHit ?? null,
+                    title: oneLine(row.meta?.title ?? row.id),
+                    // 手写文件里 hits 可能是任何东西；NaN 进工具输出会让宿主整条拒掉（而不是回一句拒写）
+                    hits: finiteNumber(row.meta?.hits),
+                    lastHit: typeof row.meta?.lastHit === 'string' ? row.meta.lastHit : null,
                   }))
                 const list = candidates.map((row) => `  ${row.id}  (hits ${row.hits})  ${row.title}`).join('\n')
                 return {
@@ -3837,15 +3976,19 @@ export function apply(ctx, rawConfig) {
               }
             }
 
+            // 新 slug 与被取代条目的 id 相同：原地更新（旧版留档，created / hits 保留）。
+            // 走「新写一条再删旧的」会因为重名写出 `-2`，文件名就这样被污染了。
+            const inPlace = Boolean(target) && slug.toLowerCase() === target.id.toLowerCase()
             const file = writeMemory(memoryDir, {
-              slug: args.slug,
+              ...(inPlace ? { id: target.id } : {}),
+              slug: slug || undefined,
               title: args.title,
               description: args.description,
               body: args.body,
               type: args.type,
               tags: args.tags,
               paths: args.paths,
-              supersedes: supersedeId || undefined,
+              ...(target && !inPlace ? { supersedes: target.id } : {}),
               confidence,
             })
             const id = path.basename(file, '.md')
@@ -3853,9 +3996,9 @@ export function apply(ctx, rawConfig) {
             // 覆盖旧偏好：新内容换了 slug 时，旧条目必须删掉（deleteMemory 会先归档），
             // 否则「新旧并存」——正是这一步要消灭的情况。
             let replaced = ''
-            if (supersedeId && id !== supersedeId) {
-              deleteMemory(memoryDir, supersedeId)
-              replaced = supersedeId
+            if (target && !inPlace && id !== target.id) {
+              deleteMemory(memoryDir, target.id)
+              replaced = target.id
             }
 
             // 同步重建向量，让下一次 recall 立刻能看到这条
@@ -3876,9 +4019,11 @@ export function apply(ctx, rawConfig) {
               // 不能写 `replaced: undefined`——显式的 undefined 不是 lossless JSON，
               // 工具输出校验会整条报错（写入其实已成功，调用方却以为失败）。
               ...(replaced ? { replaced } : {}),
+              ...(inPlace ? { updated: true } : {}),
               ...(oddPaths.length > 0 ? { pathWarnings: oddPaths } : {}),
               text:
-                `Saved memory ${id} to ${path.relative(memoryDir, file)}` +
+                `${inPlace ? 'Updated' : 'Saved'} memory ${id} ${inPlace ? 'in place' : 'to'} ${path.relative(memoryDir, file)}` +
+                `${inPlace ? ' (the previous version is in history/)' : ''}` +
                 `${replaced ? `, replacing ${replaced} (its old body is in history/)` : ''}` +
                 ` (vector index: ${built.mode}, ${built.indexed} entries).` +
                 `${tooLong ? ` Note: body is ${bodyChars} chars, above the ${CONFIG.warnBodyChars} soft threshold — saved unchanged, but consider splitting it into 2-3 atomic memories for better recall.` : ''}` +
@@ -3964,11 +4109,20 @@ export function apply(ctx, rawConfig) {
           try {
             const memoryDir = memoryDirOf(ctx, { agent: exec?.agent })
             if (!memoryDir) return { text: '无法定位工作区记忆库：当前会话没有可用工作目录。' }
-            const removed = deleteMemory(memoryDir, String(args.id ?? ''))
+            const id = String(args.id ?? '').trim()
+            // id 会逃出记忆目录（`../..`、路径分隔符）时直接拒绝，不去碰任何文件
+            if (!isSafeId(id)) {
+              return {
+                removed: false,
+                reason: 'invalid-id',
+                text: `Invalid memory id ${JSON.stringify(id.slice(0, 80))}. Use the exact id from MEMORY.md or memory_recall (a file name without ".md", no path separators).`,
+              }
+            }
+            const removed = deleteMemory(memoryDir, id)
             if (removed) await rebuildVectors(memoryDir)
             return {
               removed,
-              text: removed ? `Deleted memory ${args.id}.` : `No memory with id ${args.id}.`,
+              text: removed ? `Deleted memory ${id}.` : `No memory with id ${id}.`,
             }
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error)
@@ -4002,7 +4156,7 @@ export function apply(ctx, rawConfig) {
               `embedder: ${embedder ? 'leanvec (dim 256)' : 'unavailable -> keyword-only recall'}`,
               `vectors: ${vectors ? `${vectors.entries.length} entries in memory, built ${vectors.builtAt}` : 'none yet (rebuilt in memory on first recall)'}`,
               `recall: minVector=${CONFIG.minVectorScore} minKeyword=${CONFIG.minKeywordScore} weights=${CONFIG.weightVector}/${CONFIG.weightKeyword}`,
-              `extraction: ${CONFIG.enableExtraction ? 'on' : 'off'}  diag: ${CONFIG.enableDiagEndpoint ? 'on' : 'off'}`,
+              `extraction: ${CONFIG.enableExtraction ? 'on' : 'off'}`,
               `config issues: ${configIssues.length === 0 ? 'none' : configIssues.join(' | ')}`,
             ]
             return { text: lines.join('\n') }
@@ -4105,12 +4259,12 @@ export function apply(ctx, rawConfig) {
  * 这里把 forcedSub 塞回 argv 开头，后续所有 `argv[1]` 的取值逻辑保持不变。
  */
 async function executeMemoryCommand(ctx, invocation, forcedSub) {
-  const parsed = invocation.rawInput.trim().split(/\s+/).filter(Boolean)
-  const argv = forcedSub ? [forcedSub, ...parsed] : parsed
-  const sub = argv[0] ?? 'overview'
-
   let memoryDir
+  let argv
   try {
+    // 无参命令（memory_pending / memory_extract）没声明 input，宿主给不给 rawInput 都不能让这里抛出去
+    const parsed = String(invocation?.rawInput ?? '').trim().split(/\s+/).filter(Boolean)
+    argv = forcedSub ? [forcedSub, ...parsed] : parsed
     memoryDir = memoryDirOf(ctx, { agent: invocation?.agent })
     if (!memoryDir) {
       return { kind: 'error', text: '无法定位工作区记忆库：当前会话没有可用工作目录。' }
@@ -4119,6 +4273,7 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
     const detail = error instanceof Error ? error.message : String(error)
     return { kind: 'error', text: `Could not resolve the memory root: ${detail}` }
   }
+  const sub = argv[0] ?? 'overview'
 
   try {
     if (sub === 'overview' || sub === '') {
@@ -4207,9 +4362,16 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
       if (sub === 'accept') {
         const result = await acceptPending(memoryDir, targetId)
         if (!result.ok) return { kind: 'error', text: result.error }
+        // 全局草稿收下后进的是 AGENTS.md，没有记忆文件也没有向量
+        if (!result.file) {
+          return { kind: 'success', text: `已收下 ${targetId} → 全局 AGENTS.md（${result.action === 'updated' ? '更新了一章' : '新增了一章'}）` }
+        }
         return {
           kind: 'success',
-          text: `已收下 ${targetId} → ${result.file}（向量 ${result.vectorMode}, ${result.vectorCount} 条）`,
+          text:
+            `已收下 ${targetId} → ${result.file}` +
+            `${result.replaced ? `，取代 ${result.replaced}（旧版在历史里）` : ''}` +
+            `（向量 ${result.vectorMode}, ${result.vectorCount} 条）`,
         }
       }
       const result = rejectPending(memoryDir, targetId)
@@ -4219,7 +4381,7 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
 
     if (sub === 'extract') {
       // manual: true —— 显式命令不受 enableExtraction 影响
-      const result = await extractFromTurn(ctx, invocation.agent, memoryDir, { manual: true })
+      const result = await extractFromTurn(ctx, invocation?.agent, memoryDir, { manual: true })
       if (result.skipped) {
         return { kind: 'error', text: `未抽取：${result.skipped}${result.raw ? `\n模型原始输出片段：${result.raw}` : ''}` }
       }

@@ -91,11 +91,13 @@ if (isMain) {
     return hit ? hit.slice(name.length + 3) : fallback
   }
   const k = Number(argOf('k', '3'))
-  const minRecall1 = Number(argOf('min-recall-at-1', '0.7'))
-  const minRecallK = Number(argOf('min-recall-at-k', '0.9'))
-  const maxNegFp = Number(argOf('max-neg-fp', '0.25'))
 
   const { rows, metrics } = await runGolden({ k })
+  // 默认门槛与 test/golden.test.mjs 一致：有向量（hybrid）用严的，退化成纯关键词用放宽的
+  const hybrid = metrics.mode === 'hybrid'
+  const minRecall1 = Number(argOf('min-recall-at-1', hybrid ? '0.7' : '0.5'))
+  const minRecallK = Number(argOf('min-recall-at-k', hybrid ? '0.85' : '0.7'))
+  const maxNegFp = Number(argOf('max-neg-fp', hybrid ? '0.12' : '0.25'))
   console.log(`\n召回模式: ${metrics.mode}（索引 ${metrics.indexed} 条）`)
   console.log(`样本: 正 ${metrics.positiveCount} / 负 ${metrics.negativeCount}\n`)
 

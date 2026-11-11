@@ -227,7 +227,7 @@ console.log('\n== 项目 scope 行为不变 ==')
   const env = makeEnv()
   try {
     const before = env.agentsText()
-    const result = await run(env, { title: '项目内的决定', body: '正文。', confidence: 0.95, scope: 'project' })
+    const result = await run(env, { title: '项目内的决定', slug: 'project-decision', body: '正文。', confidence: 0.95, scope: 'project' })
     check('写进了项目库', env.libraryFiles().length === 1, env.libraryFiles().join(','))
     check('AGENTS.md 未被改动', env.agentsText() === before)
     check('返回的是记忆 id', typeof result.id === 'string' && result.id.length > 0, JSON.stringify(result.id))
@@ -241,7 +241,7 @@ console.log('\n== 不传 scope 时默认按项目处理 ==')
   const env = makeEnv()
   try {
     const before = env.agentsText()
-    await run(env, { title: '未指定归属', body: '正文。', confidence: 0.95 })
+    await run(env, { title: '未指定归属', slug: 'unspecified-scope', body: '正文。', confidence: 0.95 })
     check('进了项目库', env.libraryFiles().length === 1, env.libraryFiles().join(','))
     check('AGENTS.md 未被改动', env.agentsText() === before)
   } finally {
