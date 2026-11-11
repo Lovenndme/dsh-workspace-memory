@@ -572,7 +572,7 @@ leanvec 是静态嵌入，任意文本余弦都容易过 0.3，**等于没有闸
 - 两次 `supersedes` 都生成了 `-2` 副本（同 slug 覆盖会换 id、重置 created/hits）→ 改为原地更新
 - 每轮注入的索引里有一行摘要是「规则」：正文首行是 `## 规则` → 摘要派生跳过标题
 
-**这些已有文件没有动**（属于用户数据，未获授权）。插件重载后，下次对它们 supersede 时会自然换成英文文件名。
+用户重载插件确认无误后，已按用户要求整理（见 24.7）。
 
 ### 24.3 修了什么（按危害）
 
@@ -613,3 +613,20 @@ leanvec 是静态嵌入，任意文本余弦都容易过 0.3，**等于没有闸
 - 面板里硬编码了 200 / 20000 / 120 / 20 / 40 这几个上限，宿主改配置后两边会不一致
 - AGENTS.md 相关路由不要求 session（客户端不带）；宿主的 CORS 策略未核实
 - 标签仍禁止逗号与 `]`（新序列化器其实已能无损处理，可以放开）
+
+### 24.7 真实记忆库整理（2026-11-11，用户授权）
+
+用户在 DSH 里重载插件、确认面板与保存正常后，整理了两个真实记忆库。整理前完整备份到
+`~/.dsh/.dsh-workspace-memory-history/memory-cleanup-2026-11-11/`（21 个文件，与原目录逐字节一致）。
+
+| 库 | 原 id | 新 id | 另外改了什么 |
+|---|---|---|---|
+| DSH-Workspace | `Codex-子智能体需替换包内-codex.exe（…）` | `codex-subagent-replace-bundled-codex-exe` | `paths`：包名改目录形式；`cordis.patch.yml` / `config.toml` 收窄为 `profiles/desktop/cordis.patch.yml` / `.codex/config.toml`（原写法会命中工作区里每个插件的 patch 文件） |
+| DSH-Workspace | `本地验收-DSH-Web-插件面板：…` | `verify-dsh-web-panel-via-authenticated-url` | — |
+| DSH-Workspace | `jsdelivr-cache-must-be-purged-after-replacing-docs-images-2` | `readme-images-change-url-to-bust-camo-cache` | 摘要「规则」→ 真正的结论；旧 slug 的说法与正文结论相反（只 purge 无效）；`paths` 改为整个 `docs/` |
+| pmis-agent | `never-commit-agents-md-2` | `never-commit-agents-md` | 删掉指向自己的 `supersedes` |
+
+- 用插件自己的 `writeMemory` 改名：正文、`created`、`hits`、`lastHit`、`confidence`、`tags`、`title` 逐项核对未变
+- 各条的历史版本并入新 id 的 `history/` 目录（含被取代的旧版）；删除了 11-03 验证留下的 `history/verify-paths-hint-probe/`
+- 核对：两库各问几个问题，均命中新 id，无关提问返回空；`pathMatches` 对上真实路径；核对过程不改任何文件（`recordHits: false` + 前后哈希比对）
+- 运行中的插件里向量按旧 id 存着，下一次 `recall` 会按内容哈希对账、自动重嵌
