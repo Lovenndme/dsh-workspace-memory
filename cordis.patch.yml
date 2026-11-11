@@ -1,0 +1,13 @@
+# dsh-workspace-memory bundle patch.
+#
+# 单个宿主插件。职责边界刻意划得很窄：
+#   · 向 tools 注册 memory_* 工具
+#   · 向 commands 注册 /memory
+#   · 向 systemPrompt 注册一个 runtime context，每轮注入 MEMORY.md 索引
+#
+# 不索引项目代码与文档 —— 只索引 memories/ 下的记忆正文。
+# 上一代实现把整个工作区扫进索引（905 文件 / 8928 条，96% 是任务草稿与第三方源码），
+# 结果中文查询会返回 int16 / sha1 这类无关符号还打 100 分。这里不重复那个错误。
+- insert:
+    - id: dsh-workspace-memory
+      name: dsh-workspace-memory

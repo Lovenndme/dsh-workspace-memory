@@ -1,0 +1,86 @@
+[
+  {
+    "id": "chatter-weather",
+    "note": "纯闲聊，不该记任何东西",
+    "snippet": "用户：今天天气怎么样？\n助手：我查不到实时天气，你可以看看手机上的天气 App。\n用户：哦好。",
+    "expect": []
+  },
+  {
+    "id": "chatter-decor",
+    "note": "闲聊客套，不该记",
+    "snippet": "用户：哈哈这个颜色挺好看的\n助手：是的，这个配色我也觉得不错。\n用户：那就先这样。",
+    "expect": []
+  },
+  {
+    "id": "correction-ui-text",
+    "note": "用户给的纠正，应记 feedback",
+    "snippet": "用户：界面上不要加那种解释性小字，看着乱。以后都别加。\n助手：明白，后续界面只放数据和控件，解释写进文档。",
+    "expect": [{ "type": "feedback", "must": ["解释", "界面"] }]
+  },
+  {
+    "id": "preference-workflow",
+    "note": "常驻个人偏好，应记 user",
+    "snippet": "用户：以后每次改完插件，先跑测试再提交，别直接 push。\n助手：好，改完先跑测试，绿了再提交。",
+    "expect": [{ "type": "user", "must": ["测试", "提交"] }]
+  },
+  {
+    "id": "transient-http200",
+    "note": "一次性运行状态，不该记",
+    "snippet": "用户：这个接口现在返回 200 了吗？\n助手：返回 200 了，body 是 {\"ok\":true,\"count\":5}。\n用户：好，那就没问题了。",
+    "expect": []
+  },
+  {
+    "id": "derivable-pnpm",
+    "note": "能从 package.json 直接读到的，不该记",
+    "snippet": "用户：我们是用 pnpm 还是 npm？\n助手：package.json 里写的是 pnpm，仓库里也有 pnpm-lock.yaml。\n用户：好。",
+    "expect": []
+  },
+  {
+    "id": "decision-with-reason",
+    "note": "决策+理由，应记 project",
+    "snippet": "用户：记忆库不要放进工作区，放到 ~/.dsh 下面去，因为工作区里的东西我不想被版本库带出去。\n助手：明白，改到 ~/.dsh/projects 下面，工作区只剩源码。",
+    "expect": [{ "type": "project", "must": ["~/.dsh", "工作区"] }]
+  },
+  {
+    "id": "reference-location",
+    "note": "外部资源在哪找，应记 reference",
+    "snippet": "用户：产品需求文档都在 Confluence 的 PMIS 空间里，以后要查需求去那儿找。\n助手：记下了，需求文档在 Confluence 的 PMIS 空间。",
+    "expect": [{ "type": "reference", "must": ["Confluence"] }]
+  },
+  {
+    "id": "tools-output-noise",
+    "note": "大段工具输出，不该记",
+    "snippet": "用户：跑一下测试\n助手：（执行 pnpm test）\n  ✓ smoke 18 passed\n  ✓ recall 12 passed\n  ✓ format 20 passed\n  3 suites, 50 tests, 全部通过\n用户：嗯。",
+    "expect": []
+  },
+  {
+    "id": "version-branch",
+    "note": "版本号与分支名属于临时状态，不该记",
+    "snippet": "用户：现在版本是 0.4.0 吧？分支是 hx？\n助手：是的，package.json 里是 0.4.0，当前在 hx 分支上。\n用户：行。",
+    "expect": []
+  },
+  {
+    "id": "explicit-remember",
+    "note": "用户明确要求记住，应记",
+    "snippet": "用户：记住：这个项目同步接口到 Apifox 用 projectId=8623875，别再问我了。\n助手：已记录，后续同步直接用 8623875。",
+    "expect": [{ "type": "reference", "must": ["8623875"] }]
+  },
+  {
+    "id": "no-durable-info",
+    "note": "随口应答，不含持久信息",
+    "snippet": "用户：嗯，那就先这样吧。\n助手：好，有需要随时说。",
+    "expect": []
+  },
+  {
+    "id": "tech-pitfall",
+    "note": "技术坑 + 正确做法，应记",
+    "snippet": "用户：为什么删掉 link 装的依赖会把工作区删掉？\n助手：因为 pnpm 删除时会顺着 junction 删目标目录，把源目录连同 .git 一起删穿。正确做法是先 rmdir 断开链接再 remove。",
+    "expect": [{ "type": "project", "must": ["rmdir"] }]
+  },
+  {
+    "id": "mixed-chatter-and-gold",
+    "note": "闲聊里夹带一条真偏好，只该记那一条",
+    "snippet": "用户：今天有点累。对了，以后给我写文档别用感叹号，太吵了。\n助手：好的，文档里不用感叹号。",
+    "expect": [{ "type": "feedback", "must": ["感叹号"] }]
+  }
+]

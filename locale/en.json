@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workspace Memory",
+    "description": "Persistent workspace memory: one Markdown file per memory, a MEMORY.md index injected every turn, hybrid vector + keyword recall, and an editable card panel in the right sidebar."
+  }
+}

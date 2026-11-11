@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Workspace memory">
+  <g fill="none" stroke="#247bbf" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <!-- three stacked memory cards, back to front -->
+    <rect x="20" y="12" width="34" height="22" rx="4" opacity="0.35"/>
+    <rect x="14" y="21" width="34" height="22" rx="4" opacity="0.6"/>
+    <rect x="8"  y="30" width="34" height="22" rx="4" fill="#247bbf" fill-opacity="0.12"/>
+    <!-- text lines on the front card -->
+    <line x1="14" y1="38" x2="36" y2="38" stroke-width="2.2"/>
+    <line x1="14" y1="44" x2="28" y2="44" stroke-width="2.2" opacity="0.7"/>
+  </g>
+</svg>

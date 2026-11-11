@@ -1,0 +1,4 @@
+node_modules/
+# 面板截图脚手架的 fixture 含真实记忆内容，刻意不入库（见 HANDOFF 第六节）
+preview/verification/fixture.js
+preview/verification/.wsm-fixture.js

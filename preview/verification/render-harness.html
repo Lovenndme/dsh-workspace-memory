@@ -1,0 +1,345 @@
+<!doctype html>
+<!--
+  渲染验收脚手架（开发用，不属于插件产物；交付后可删）。
+
+  目的是把 client.js 里**真实的** MemoryPanel 组件挂进页面，用**真实样式表**渲染，
+  再用 headless 浏览器截图——而不是只做「非渲染的 DOM 检查」。
+
+  与 React 的差异（务必知道）：
+   · 用最小 hooks 运行时替代 React，hooks 按「组件实例路径」分槽，避免串号。
+   · 每次渲染重建子树，但**保留根容器**，这样 ResizeObserver 观察的节点不被换掉。
+   · 不做真实 diff，交互后的节点状态（滚动位置、焦点）不会保留。
+  结论：布局与样式可信；React 运行时行为（并发、批处理）不可在此验证。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>记忆面板 · 渲染验收</title>
+<style>
+  /* 真实 DSH 里这些变量由主题注入；脚手架里补一份深色主题值 */
+  :root {
+    --dsw-alias-bg-base: #17181a;
+    --dsw-alias-bg-layer-1: #1e1f22;
+    --dsw-alias-bg-layer-2: #26272b;
+    --dsw-alias-bg-canvas: #0d0e10;
+    --dsw-alias-border-l1: #2e3035;
+    --dsw-alias-border-l2: #3a3d43;
+    --dsw-alias-label-primary: #e6e7ea;
+    --dsw-alias-label-secondary: #9a9da6;
+    --dsw-alias-brand-primary: #4a7dff;
+    --dsw-alias-state-error-primary: #f06a6a;
+    --dsw-alias-state-success-primary: #4ec9a0;
+    --dsw-alias-state-warn-primary: #e0a458;
+  }
+  html, body { margin: 0; height: 100%; background: var(--dsw-alias-bg-canvas); color: var(--dsw-alias-label-primary); }
+  #frame { margin: 0 auto; height: 100%; }
+</style>
+</head>
+<body>
+<div id="frame"><div id="mount" style="height:100%"></div></div>
+<script>
+/* ------------------------------------------------------- 最小 hooks 运行时 */
+const store = new Map();       // 实例路径 → { slots: [] }
+const stack = [];              // 当前渲染的组件路径
+let instanceSeq = new Map();   // 同一父路径下同类组件的出现序号
+let effectQueue = [];
+let scheduled = false;
+let rendering = false;
+let frameCount = 0;
+
+function bucketOf(key) {
+  if (!store.has(key)) store.set(key, { slots: [], cursor: 0 });
+  return store.get(key);
+}
+
+function currentBucket() {
+  return bucketOf(stack.join('/') || 'root');
+}
+
+function depsEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (!Object.is(a[i], b[i])) return false;
+  return true;
+}
+
+function useState(initial) {
+  const bucket = currentBucket();
+  const index = bucket.cursor++;
+  if (index >= bucket.slots.length) bucket.slots.push(typeof initial === 'function' ? initial() : initial);
+  const set = (value) => {
+    const next = typeof value === 'function' ? value(bucket.slots[index]) : value;
+    if (Object.is(next, bucket.slots[index])) return;
+    bucket.slots[index] = next;
+    if (window.__DBG__ && typeof next === 'number') window.__DBG__.sets.push(next);
+    schedule();
+  };
+  return [bucket.slots[index], set];
+}
+
+function useRef(initial) {
+  const bucket = currentBucket();
+  const index = bucket.cursor++;
+  if (!bucket.slots[index]) bucket.slots[index] = { current: initial };
+  return bucket.slots[index];
+}
+
+function useMemo(factory, deps) {
+  const bucket = currentBucket();
+  const index = bucket.cursor++;
+  const slot = bucket.slots[index];
+  if (slot && depsEqual(slot.deps, deps)) return slot.value;
+  const value = factory();
+  bucket.slots[index] = { deps, value };
+  return value;
+}
+
+function useCallback(fn, deps) {
+  return useMemo(() => fn, deps);
+}
+
+function useEffect(effect, deps) {
+  const bucket = currentBucket();
+  const index = bucket.cursor++;
+  const slot = bucket.slots[index];
+  // 脚手架每帧重建节点，ref 指向的 DOM 会被换掉；因此空依赖的效果必须每帧重跑，
+  // 否则观察者会盯着已摘除的旧节点（宽度读成 0）。真实 React 不存在这个问题。
+  const alwaysRun = Array.isArray(deps) && deps.length === 0;
+  if (!alwaysRun && slot && slot.hasRun && depsEqual(slot.deps, deps)) return;
+  const previous = slot && typeof slot.cleanup === 'function' ? slot.cleanup : null;
+  const record = { deps, hasRun: true, cleanup: null };
+  bucket.slots[index] = record;
+  effectQueue.push({ previous, effect, record });
+}
+
+function schedule() {
+  if (scheduled) return;
+  scheduled = true;
+  requestAnimationFrame(() => {
+    scheduled = false;
+    renderAll();
+  });
+}
+
+/* --------------------------------------------------------------- h → DOM */
+const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) });
+
+function applyProps(element, key, value) {
+  if (key === 'key' || key === 'children') return;
+  // ref 必须真的挂上，否则组件测不到容器宽度（布局永远停在 split）
+  if (key === 'ref') {
+    if (typeof value === 'function') value(element)
+    else if (value && typeof value === 'object') value.current = element
+    return
+  }
+  if (value === null || value === undefined || value === false) return;
+  if (key === 'className') { element.setAttribute('class', String(value)); return; }
+  if (key === 'htmlFor') { element.setAttribute('for', String(value)); return; }
+  if (key === 'style' && typeof value === 'object') {
+    for (const [prop, val] of Object.entries(value)) if (val !== undefined && val !== null) element.style[prop] = String(val);
+    return;
+  }
+  if (key === 'dangerouslySetInnerHTML') { element.innerHTML = value.__html ?? ''; return; }
+  if (key === 'hidden') { if (value) element.setAttribute('hidden', ''); return; }
+  if (key === 'value') {
+    // <select> 的 value 必须在 option 生成后才能生效，否则会落到第一项
+    if (element.tagName === 'SELECT') {
+      element.dataset.pendingValue = String(value);
+      return;
+    }
+    // 只接受字符串/数字，避免把对象塞进 value 变成 [object Object]
+    element.value = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+    return;
+  }
+  if (key === 'checked') { element.checked = Boolean(value); return; }
+  if (key.startsWith('on') && typeof value === 'function') {
+    const eventName = key.slice(2).toLowerCase();
+    // React 的 onChange 走 DOM 的 input 事件（不是 change），这里必须对齐
+    if (eventName === 'change') {
+      element.addEventListener('input', value);
+      element.addEventListener('change', value);
+    } else {
+      element.addEventListener(eventName, value);
+    }
+    return;
+  }
+  if (typeof value === 'boolean') { if (value) element.setAttribute(key, ''); return; }
+  element.setAttribute(key, String(value));
+}
+
+function renderNode(node, parent) {
+  if (node === null || node === undefined || node === false || node === true) return;
+  if (Array.isArray(node)) { for (const child of node) renderNode(child, parent); return; }
+  if (typeof node === 'string' || typeof node === 'number') {
+    parent.appendChild(document.createTextNode(String(node)));
+    return;
+  }
+  if (typeof node.type === 'function') {
+    const name = node.type.name || 'anon';
+    const parentKey = stack.join('/');
+    const seqKey = parentKey + '|' + name;
+    const seq = (instanceSeq.get(seqKey) || 0) + 1;
+    instanceSeq.set(seqKey, seq);
+    stack.push(name + '#' + seq);
+    bucketOf(stack.join('/')).cursor = 0;
+    try {
+      renderNode(node.type(node.props), parent);
+    } finally {
+      stack.pop();
+    }
+    return;
+  }
+  if (typeof node.type === 'string') {
+    const element = document.createElement(node.type);
+    for (const [key, value] of Object.entries(node.props)) applyProps(element, key, value);
+    for (const child of node.children || []) renderNode(child, element);
+    // select 延迟赋值：此时 option 才存在
+    if (element.dataset && element.dataset.pendingValue !== undefined) {
+      element.value = element.dataset.pendingValue;
+      delete element.dataset.pendingValue;
+    }
+    parent.appendChild(element);
+    return;
+  }
+  for (const child of node.children || []) renderNode(child, parent);
+}
+
+let rootComponent = null;
+let rootProps = {};
+
+function renderAll() {
+  if (rendering) return;
+  rendering = true;
+  frameCount += 1;
+  if (window.__DBG__) window.__DBG__.renders += 1;
+  if (frameCount > 60) {
+    document.getElementById('mount').textContent = '渲染次数过多，疑似效果死循环';
+    rendering = false;
+    return;
+  }
+
+  instanceSeq = new Map();
+  effectQueue = [];
+  const mount = document.getElementById('mount');
+  const next = document.createElement('div');
+  next.style.height = '100%';
+  stack.length = 0;
+  renderNode(h(rootComponent, rootProps), next);
+  // 保留根容器：ResizeObserver 观察的节点不能被换掉
+  mount.replaceChildren(next);
+  rendering = false;
+
+  for (const { previous, effect, record } of effectQueue) {
+    if (typeof previous === 'function') previous();
+    const cleanup = effect();
+    record.cleanup = typeof cleanup === 'function' ? cleanup : null;
+  }
+}
+
+/* ------------------------------------------------------------- 挂载流程 */
+window.__ModuleLoader__ = { load(definition) { window.__WSM_DEF__ = definition; } };
+window.__DBG__ = { renders: 0, sets: [] };
+
+// file:// 下 fetch 不可用，fixture 由脚本同步注入；惰性读取，因为本段先执行
+const getFixture = () => Promise.resolve(window.__FIXTURE__);
+
+window.fetch = (url) => {
+  const target = String(url);
+  // 先判 /agents/sections：它也是 /agents 前缀，顺序反了会喂错 fixture
+  if (target.includes('/agents/sections')) return getFixture().then((fixture) => ({ ok: true, json: async () => fixture.agentsSections }));
+  if (target.includes('/list')) return getFixture().then((fixture) => ({ ok: true, json: async () => fixture.list }));
+  if (target.includes('/agents')) return getFixture().then((fixture) => ({ ok: true, json: async () => fixture.agents }));
+  return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+};
+
+window.addEventListener('load', () => {
+  try {
+    const definition = window.__WSM_DEF__;
+    if (!definition) { document.body.textContent = '未捕获到插件定义'; return; }
+
+    const react = { createElement: h, useState, useEffect, useRef, useMemo, useCallback, Fragment: 'fragment' };
+    const module = definition.factory((name) => {
+      if (name === 'react') return react;
+      throw new Error('unexpected require: ' + name);
+    });
+
+    const registered = {};
+    const ctx = {
+      effect(fn) { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {}; },
+      get(name) {
+        if (name === 'sidebarRightTabs') return { register: () => () => {} };
+        if (name === 'layout') return { openRightbar() {} };
+        if (name === 'sidebarRight') return { openTab() {} };
+        return undefined;
+      },
+      on() {},
+      slots: {
+        inject(name, fn) { return fn(); },
+        register(options, component) { registered[options.key || options.name] = component; return () => {}; },
+      },
+    };
+    module.apply(ctx);
+
+    const Panel = registered['dsh-workspace-memory/list'];
+    if (!Panel) { document.body.textContent = '未注册面板组件'; return; }
+
+    rootComponent = Panel;
+    rootProps = { sessionId: 'harness' };
+    renderAll();
+
+    // 用轮询代替固定延时：虚拟时间下渲染时机不稳，固定 setTimeout 会点空
+    const waitFor = (selector, callback, tries = 60) => {
+      const found = document.querySelector(selector);
+      if (found) { callback(found); return; }
+      if (tries <= 0) { document.title = 'WAIT-TIMEOUT ' + selector; return; }
+      setTimeout(() => waitFor(selector, callback, tries - 1), 100);
+    };
+
+    const params = new URLSearchParams(location.search);
+    const wantsDetail = params.get('detail') === '1' || params.get('view') === 'preview' || params.get('guard') === '1';
+
+    if (wantsDetail) {
+      waitFor('.wsm-item', (first) => first.click());
+    }
+
+    // ?agents=1：切到「全局 AGENTS.md」页签
+    if (params.get('agents') === '1') {
+      waitFor('.wsm-header-top .wsm-tabs button:nth-child(2)', (tab) => {
+        tab.click();
+        document.title = 'AGENTS-TAB-CLICKED';
+      });
+    }
+
+    if (params.get('view') === 'preview') {
+      waitFor('.wsm-editor-tabs button:nth-child(2)', (preview) => {
+        preview.click();
+        document.title = 'PREVIEW-CLICKED';
+      });
+    }
+
+    if (params.get('guard') === '1') {
+      waitFor('#wsm-title', (title) => {
+        title.value = '改动过的标题';
+        title.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      setTimeout(() => {
+        const items = [...document.querySelectorAll('.wsm-item')];
+        if (items[1]) items[1].click();
+        document.title = 'GUARD-TRIGGERED items=' + items.length;
+      }, 1500);
+    }
+
+    // 探针：把测量到的尺寸写进标题，便于 --dump-dom 时核对
+    setTimeout(() => {
+      const panel = document.querySelector('.wsm-panel');
+      const rect = panel ? panel.getBoundingClientRect() : { width: -1 };
+      document.title = `PROBE ro=${typeof ResizeObserver} inner=${window.innerWidth} frame=${document.getElementById('frame').clientWidth} panel=${Math.round(rect.width)} layout=${panel ? panel.dataset.layout : 'none'} renders=${window.__DBG__ ? window.__DBG__.renders : -1} sets=${window.__DBG__ ? window.__DBG__.sets.join(',') : ''}`;
+    }, 1200);
+  } catch (error) {
+    document.body.textContent = 'harness error: ' + (error && error.stack ? error.stack : error);
+  }
+});
+</script>
+<script src="./fixture.js"></script>
+<script src="../../client.js"></script>
+</body>
+</html>

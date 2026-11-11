@@ -1,0 +1,118 @@
+[
+  {
+    "id": "v2-manual-wheel",
+    "note": "纯噪声：手册已知信息（README 写了怎么启动）。不满足判据3",
+    "snippet": "用户：这个服务怎么启动？\n助手：README 里写了：`pnpm dev`，默认端口 3000。\n用户：哦看到了。",
+    "expect": []
+  },
+  {
+    "id": "v2-emotion-no-action",
+    "note": "一次性情绪，且没说清要改什么。不满足判据1与2",
+    "snippet": "用户：这界面真丑。\n助手：哪里丑？需要我调整吗？\n用户：算了不重要，先往下做吧。",
+    "expect": []
+  },
+  {
+    "id": "v2-measurable-stale",
+    "note": "可测量且会变的事实（跑一次 CI 就有）。不满足判据2与3",
+    "snippet": "用户：全量构建大概多久？\n助手：刚跑了一次，大概两分钟。\n用户：还行。",
+    "expect": []
+  },
+  {
+    "id": "v2-derivable-from-repo",
+    "note": "package.json 里能直接读到测试框架。不满足判据3",
+    "snippet": "用户：我们测试用的是啥框架？\n助手：package.json 里 devDependencies 有 vitest，配置在 vitest.config.ts。\n用户：好。",
+    "expect": []
+  },
+  {
+    "id": "v2-status-snapshot",
+    "note": "一次性运行状态。不满足判据2",
+    "snippet": "用户：现在服务起了吗？\n助手：起了，pid 18234，占用 320MB 内存。\n用户：知道了。",
+    "expect": []
+  },
+  {
+    "id": "v2-explicit-correction",
+    "note": "明确纠正我的做法，且会改变我下次的行为。三条全满足",
+    "snippet": "用户：你刚才那种一口气改十几个文件的做法不行。以后大改先给我方案，我同意再动手。\n助手：明白，大改先出方案等你确认。",
+    "expect": [{ "type": "feedback", "must": ["方案"] }]
+  },
+  {
+    "id": "v2-standing-preference",
+    "note": "常驻偏好，明确说\"以后\"。三条全满足",
+    "snippet": "用户：以后给我解释东西别用比喻，直接说机制。\n助手：好，直接讲机制。",
+    "expect": [{ "type": "user", "must": ["比喻"] }]
+  },
+  {
+    "id": "v2-constraint-nonobvious",
+    "note": "从代码推不出来的业务约束，会改变实现方式。三条全满足",
+    "snippet": "用户：这个字段后端只接受整数，传小数会被静默截断成整数，别问我怎么知道的。\n助手：明白，写库前先取整，不做四舍五入而是截断。",
+    "expect": [{ "type": "project", "must": ["整数"] }]
+  },
+  {
+    "id": "v2-trap-derivable-but-asked",
+    "note": "用户问了、我也答了，但答案能从仓库读到。不满足判据3 → 不该记",
+    "snippet": "用户：我们的 Node 版本要求是多少？\n助手：package.json 的 engines 里写的是 >=18。\n用户：好的。",
+    "expect": []
+  },
+  {
+    "id": "v2-trap-chitchat-with-jargon",
+    "note": "听起来专业，但不含任何持久要求",
+    "snippet": "用户：这个 monorepo 的依赖解析挺有意思的，webpack 那套注解真复杂。\n助手：是的，解析算法确实绕。\n用户：嗯，继续吧。",
+    "expect": []
+  },
+  {
+    "id": "v2-supersede-latest-wins",
+    "note": "反悔：先说用 pnpm，又说改回 npm。同主题 → 只该留下\"用 npm\"这一条",
+    "snippet": "用户：以后这个仓库统一用 pnpm。\n助手：好，用 pnpm。\n用户：等一下，算了还是用 npm 吧，团队里有人不熟 pnpm。\n助手：明白，改回 npm。",
+    "expect": [{ "type": "user", "must": ["npm"] }]
+  },
+  {
+    "id": "v2-two-distinct-topics",
+    "note": "两条不同主题，都该记，且不能互相取代",
+    "snippet": "用户：提交前必须跑 format 检查，不然 CI 会红。\n助手：好。\n用户：另外，接口返回一律用 { ok, data, error } 这个结构。\n助手：记下了。",
+    "expect": [
+      { "type": "feedback", "must": ["format"] },
+      { "type": "project", "must": ["ok"] }
+    ]
+  },
+  {
+    "id": "v2-confirmed-approach",
+    "note": "助手提方案、用户明确采纳。是可复用的方法，三条基本满足",
+    "snippet": "用户：改完插件怎么让它生效，每次都要重启吗？\n助手：不用，把插件行 enabled 先关再开就能换模块代次，比重启快。\n用户：行，以后就按这个来。",
+    "expect": [{ "type": "project", "must": ["enabled"] }]
+  },
+  {
+    "id": "v2-long-noise-one-gold",
+    "note": "长对话里埋一条真金，其余全是过程噪音",
+    "snippet": "用户：先看下这个报错。\n助手：是 import 路径大小写不一致。\n用户：改了。\n助手：重新跑测试，全绿。\n用户：下一个，样式有点歪。\n助手：调了 padding。\n用户：好多了。然后接口那边返回结构不对。\n助手：改成 { ok, data, error } 了。\n用户：嗯。对了还有一件事——以后所有新接口的字段名统一用 snake_case，前端不用再转换。\n助手：明白，新接口字段用 snake_case。\n用户：继续吧。",
+    "expect": [{ "type": "feedback", "must": ["snake_case"] }]
+  },
+  {
+    "id": "v2-multi-gold-four",
+    "note": "一段里有四条该记的，用于观察 extractMaxPerTurn 截断",
+    "snippet": "用户：几条规矩记一下。一，文档别用感叹号。二，提交信息用中文。三，日志一律走 logger，不许 console.log。四，测试文件放 __tests__ 目录，别和源码混。\n助手：四条都记下了。",
+    "expect": [
+      { "type": "feedback", "must": ["感叹号"] },
+      { "type": "feedback", "must": ["提交"] },
+      { "type": "feedback", "must": ["logger"] },
+      { "type": "feedback", "must": ["__tests__"] }
+    ]
+  },
+  {
+    "id": "v2-assistant-inference-unconfirmed",
+    "note": "助手自己推断、用户没确认也没反对就继续。不满足判据1（未经确认的推断不该当规则）",
+    "snippet": "用户：这个函数怎么这么慢？\n助手：可能是缓存没命中，也可能是有 N+1 查询，我加个日志看看。\n用户：好。\n助手：（加日志）确实有 N+1。\n用户：那修吧。",
+    "expect": []
+  },
+  {
+    "id": "v2-external-resource",
+    "note": "外部信息在哪找，代码里没有。三条全满足",
+    "snippet": "用户：埋点文档不在仓库里，在公司的 DataHub 上，搜 PMIS 就能找到。\n助手：明白了，埋点文档去 DataHub 搜 PMIS。",
+    "expect": [{ "type": "reference", "must": ["DataHub"] }]
+  },
+  {
+    "id": "v2-conditional-constraint",
+    "note": "带条件的约束，条件本身是关键信息",
+    "snippet": "用户：只有在 staging 环境才连真实支付网关，本地和 test 一律用 mock。\n助手：好，靠环境判断，非 staging 用 mock。",
+    "expect": [{ "type": "project", "must": ["staging"] }]
+  }
+]

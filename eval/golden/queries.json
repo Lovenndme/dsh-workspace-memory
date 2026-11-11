@@ -1,0 +1,120 @@
+[
+  {
+    "id": "pos-hot-reload",
+    "kind": "positive",
+    "query": "改了插件代码，但运行中的行为一点没变，难道只能重启整个应用？",
+    "expect": ["hot-reload-local-bundle-generation"],
+    "note": "用症状提问，不含标题词"
+  },
+  {
+    "id": "pos-ui-no-explain",
+    "kind": "positive",
+    "query": "面板里要不要加一行小字解释这个数字的口径？",
+    "expect": ["no-explanatory-text-in-ui"],
+    "note": "问句形式，实际是在问该不该加解释文案"
+  },
+  {
+    "id": "pos-npm-cadence",
+    "kind": "positive",
+    "query": "包改完就想发版，每次都得手动改版本号吗",
+    "expect": ["npm-publish-every-4-hours-not-per-change"],
+    "note": "口语化，不含 GitHub Actions 字样"
+  },
+  {
+    "id": "pos-pnpm-link",
+    "kind": "positive",
+    "query": "用 pnpm 删掉那个 link 安装的插件之后，源码目录的 .git 打不开了",
+    "expect": ["pnpm-remove-link-deletes-target"],
+    "note": "描述事故现象"
+  },
+  {
+    "id": "pos-ui-refactor",
+    "kind": "positive",
+    "query": "想一次性把整套样式层换掉，上次这么干被否了",
+    "expect": ["small-verifiable-ui-refactors"],
+    "note": "回顾上次被回滚的决策"
+  },
+  {
+    "id": "pos-db-migration",
+    "kind": "positive",
+    "query": "线上要给表加一个字段，需要提前准备什么",
+    "expect": ["db-migration-rules"],
+    "note": "合成语料"
+  },
+  {
+    "id": "pos-api-wrapper",
+    "kind": "positive",
+    "query": "页面组件里直接写 fetch 行不行",
+    "expect": ["api-request-wrapper"],
+    "note": "合成语料，问的是约定"
+  },
+  {
+    "id": "pos-logging",
+    "kind": "positive",
+    "query": "排查问题方便，能不能把请求头连同 token 一起打出来",
+    "expect": ["logging-rules"],
+    "note": "合成语料，实际违反的是日志脱敏规则"
+  },
+  {
+    "id": "pos-dep-upgrade",
+    "kind": "positive",
+    "query": "依赖出了新的大版本，直接自动升上去可以吗",
+    "expect": ["dependency-upgrade-policy"],
+    "note": "合成语料"
+  },
+  {
+    "id": "pos-test-order",
+    "kind": "positive",
+    "query": "提交前跑哪些测试比较省时间",
+    "expect": ["test-strategy"],
+    "note": "合成语料"
+  },
+  {
+    "id": "neg-https-cert",
+    "kind": "negative",
+    "query": "Nginx 怎么配置 HTTPS 证书自动续期",
+    "expect": []
+  },
+  {
+    "id": "neg-k8s",
+    "kind": "negative",
+    "query": "Kubernetes 的 Pod 一直 CrashLoopBackOff 怎么排查",
+    "expect": []
+  },
+  {
+    "id": "neg-python-async",
+    "kind": "negative",
+    "query": "Python 里协程和线程应该怎么选",
+    "expect": []
+  },
+  {
+    "id": "neg-regex-perf",
+    "kind": "negative",
+    "query": "正则表达式回溯太严重导致超时怎么优化",
+    "expect": []
+  },
+  {
+    "id": "neg-mobile",
+    "kind": "negative",
+    "query": "移动端适配该用 rem 还是 vw",
+    "expect": []
+  },
+  {
+    "id": "neg-git-conflict",
+    "kind": "negative",
+    "query": "解决合并冲突到底该用 rebase 还是 merge",
+    "expect": []
+  },
+  {
+    "id": "neg-redis",
+    "kind": "negative",
+    "query": "Redis 缓存雪崩要怎么防止",
+    "expect": []
+  },
+  {
+    "id": "neg-css-anim",
+    "kind": "negative",
+    "query": "CSS 动画在低端机上掉帧怎么处理",
+    "expect": []
+  }
+]

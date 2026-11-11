@@ -1,0 +1,1167 @@
+<!doctype html>
+<!--
+  DeepSeek Harness · 记忆管理 / 单文件静态预览
+  Product Design「文档工作台」方案，2026-11-02。
+  所有记忆修改仅保存在当前页面的内存中；刷新页面会还原内嵌数据。
+  不调用插件接口，不写记忆文件或 AGENTS.md，不引入外部资源。
+  保留 .wsm-* 组件映射和 --dsw-alias-* 主题变量，便于搬回运行时。
+  桌面为列表 + 文档；窄侧栏为列表 / 详情切换。顶部灰条仅为预览控制。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepSeek Harness · 记忆管理</title>
+  <style>
+/* Theme aliases stay compatible with the host's injected dark theme. */
+:root {
+  color-scheme: dark;
+  --dsw-alias-bg-base: #17181a;
+  --dsw-alias-bg-layer-1: #1e1f22;
+  --dsw-alias-bg-layer-2: #26272b;
+  --dsw-alias-bg-canvas: #111214;
+  --dsw-alias-border-l1: #2e3035;
+  --dsw-alias-border-l2: #3a3d43;
+  --dsw-alias-label-primary: #e6e7ea;
+  --dsw-alias-label-secondary: #9a9da6;
+  --dsw-alias-brand-primary: #4a7dff;
+  --dsw-alias-state-error-primary: #f06a6a;
+  --dsw-alias-state-success-primary: #4ec9a0;
+  --dsw-alias-state-warn-primary: #e0a458;
+  --wsm-selection: color-mix(in srgb, var(--dsw-alias-brand-primary) 13%, var(--dsw-alias-bg-layer-1));
+  --wsm-button-bg: color-mix(in srgb, var(--dsw-alias-brand-primary) 72%, var(--dsw-alias-bg-base));
+  --wsm-mono: Consolas, "SFMono-Regular", "Liberation Mono", "Microsoft YaHei", monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; min-width: 320px; height: 100%; }
+body { background: var(--dsw-alias-bg-canvas); color: var(--dsw-alias-label-primary); font: 14px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+button, input, textarea, select { font: inherit; }
+button, select { cursor: pointer; }
+button { color: inherit; }
+button, input, textarea, select { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, [tabindex="0"]:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px;
+}
+button:disabled, input:disabled, textarea:disabled, select:disabled { cursor: default; }
+button:disabled { opacity: .42; }
+::selection { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 32%, transparent); }
+* { scrollbar-width: thin; scrollbar-color: var(--dsw-alias-border-l2) transparent; }
+.wsm-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* Preview controls sit outside the plugin panel. */
+.stage { display: flex; min-height: 100%; flex-direction: column; align-items: center; }
+.stage-bar { height: 38px; flex: 0 0 38px; display: flex; align-items: center; justify-content: center; gap: 16px; width: 100%; color: var(--dsw-alias-label-secondary); font-size: 11px; }
+.stage-modes { display: flex; gap: 3px; }
+.stage-bar button, .stage-bar select { border: 0; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-secondary); padding: 3px 8px; font-size: 11px; }
+.stage-bar button[aria-pressed="true"] { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+.stage-bar button:hover, .stage-bar select:hover { color: var(--dsw-alias-label-primary); }
+.stage-save { display: flex; gap: 4px; align-items: center; }
+.stage-bar select { background: var(--dsw-alias-bg-layer-1); }
+
+.panel { position: relative; display: flex; flex-direction: column; width: min(1440px, 100%); height: calc(100vh - 38px); height: calc(100dvh - 38px); min-height: 0; max-height: 1024px; background: var(--dsw-alias-bg-base); border: 1px solid var(--dsw-alias-border-l1); overflow: hidden; }
+.panel[data-mode="wide"] { width: min(860px, 100%); }
+.panel[data-mode="narrow"] { width: min(420px, 100%); }
+.wsm-header { display: flex; flex: 0 0 64px; min-width: 0; align-items: center; justify-content: space-between; gap: 20px; padding: 0 22px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.wsm-header-top, .wsm-header-tools { display: flex; align-items: center; min-width: 0; gap: 22px; }
+.wsm-brand { font-size: 19px; font-weight: 650; letter-spacing: -.4px; white-space: nowrap; }
+.wsm-title { font-size: 17px; color: var(--dsw-alias-label-secondary); padding-left: 22px; border-left: 1px solid var(--dsw-alias-border-l2); white-space: nowrap; }
+.wsm-workspace { color: var(--dsw-alias-label-secondary); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 230px; }
+.wsm-btn { display: inline-flex; justify-content: center; align-items: center; min-height: 34px; padding: 5px 16px; background: transparent; color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; white-space: nowrap; font-size: 13px; line-height: 1.4; transition: background-color .12s, border-color .12s, color .12s; }
+.wsm-btn:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2); border-color: var(--dsw-alias-label-secondary); }
+.wsm-btn:active:not(:disabled) { background: var(--dsw-alias-bg-layer-1); }
+.wsm-btn.primary { background: var(--wsm-button-bg); border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-primary); }
+.wsm-btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 73%, var(--dsw-alias-bg-base)); }
+.wsm-btn-small { min-height: 28px; padding: 3px 12px; font-size: 12px; }
+.wsm-text-btn { border: 0; background: transparent; color: var(--dsw-alias-label-secondary); padding: 5px 0; font-size: 13px; }
+.wsm-text-btn:hover:not(:disabled) { color: var(--dsw-alias-label-primary); }
+.wsm-select { min-height: 32px; padding: 4px 28px 4px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-size: 13px; max-width: 100%; }
+option { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
+
+.panel-body { display: grid; grid-template-columns: clamp(260px, 27%, 400px) minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+.list-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--dsw-alias-bg-layer-1); border-right: 1px solid var(--dsw-alias-border-l1); }
+.wsm-list-tools { flex: 0 0 auto; padding: 0 16px 16px; }
+.wsm-tabs { display: flex; gap: 23px; height: 54px; border-bottom: 1px solid var(--dsw-alias-border-l1); margin-bottom: 16px; }
+.wsm-tabs button { position: relative; padding: 0 10px; font-size: 14px; color: var(--dsw-alias-label-secondary); background: transparent; border: 0; white-space: nowrap; }
+.wsm-tabs button:first-child { margin-left: -9px; }
+.wsm-tabs button[aria-selected="true"], .wsm-editor-tabs button[aria-selected="true"] { color: var(--dsw-alias-brand-primary); }
+.wsm-tabs button[aria-selected="true"]::after, .wsm-editor-tabs button[aria-selected="true"]::after { position: absolute; content: ""; height: 2px; bottom: -1px; left: 0; right: 0; background: var(--dsw-alias-brand-primary); border-radius: 1px; }
+.wsm-search { display: block; width: 100%; height: 37px; padding: 7px 12px; color: var(--dsw-alias-label-primary); background: transparent; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; font-size: 13px; }
+input::placeholder, textarea::placeholder { color: var(--dsw-alias-label-secondary); opacity: .8; }
+.wsm-list-region { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.list-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 16px; }
+.wsm-item { position: relative; display: block; width: 100%; padding: 16px 20px 13px; text-align: left; font: inherit; color: var(--dsw-alias-label-primary); background: transparent; border: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); border-left: 3px solid transparent; cursor: pointer; }
+.wsm-item:hover { background: var(--dsw-alias-bg-layer-2); }
+.wsm-item[aria-selected="true"] { background: var(--wsm-selection); border-left-color: var(--dsw-alias-brand-primary); }
+.wsm-item:focus-visible { outline-offset: -3px; }
+.wsm-item-title { margin-bottom: 5px; font-weight: 550; font-size: 14px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.wsm-item-desc { font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.wsm-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 10px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.wsm-badge { padding: 0 5px; line-height: 19px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 4px; }
+.wsm-badge.t-global { margin-left: auto; padding: 0; border: 0; }
+.wsm-item-dirty { color: var(--dsw-alias-state-warn-primary); font-size: 10px; }
+.wsm-empty { padding: 28px 20px; text-align: center; color: var(--dsw-alias-label-secondary); font-size: 13px; }
+.wsm-agents-row { flex: 0 0 auto; padding: 15px 20px 20px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.wsm-agents-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.wsm-agents-name { color: var(--dsw-alias-label-primary); font-size: 14px; }
+.wsm-agents-actions { display: flex; gap: 12px; }
+.wsm-agents-actions .wsm-select { flex: 1; min-width: 0; }
+.wsm-agents-actions .wsm-btn { flex: 0 0 78px; }
+
+/* A document, not a column of form cards. */
+.detail-pane, .wsm-detail-document { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.wsm-detail-document { flex: 1 1 auto; }
+.wsm-detail-empty { display: flex; align-items: center; justify-content: center; flex: 1; color: var(--dsw-alias-label-secondary); }
+.wsm-detail-main { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.wsm-doc-head { flex: 0 0 auto; padding: 23px 36px 17px; }
+.wsm-crumbs { display: none; margin: -7px 0 10px; }
+.wsm-field { min-width: 0; }
+.wsm-input { width: 100%; background: transparent; color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; padding: 7px 10px; }
+textarea.wsm-input { display: block; resize: none; }
+.wsm-input.wsm-detail-title, .wsm-input.wsm-description { box-sizing: border-box; border: 0; border-radius: 3px; padding: 2px 0; width: 100%; overflow-y: auto; overflow-x: hidden; }
+.wsm-detail-title { margin: 0; font-size: 26px; line-height: 1.42; letter-spacing: -.35px; font-weight: 650; min-height: 41px; max-height: 151px; }
+.wsm-description { margin: 10px 0 0; font-size: 14px; line-height: 1.7; font-weight: 400; color: var(--dsw-alias-label-secondary); min-height: 28px; max-height: 76px; }
+.wsm-input.wsm-description { color: var(--dsw-alias-label-secondary); }
+.wsm-detail-title:hover, .wsm-description:hover { background: var(--dsw-alias-bg-layer-1); }
+.wsm-property-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 12px; margin-top: 17px; }
+.wsm-property-row .wsm-select { background: var(--dsw-alias-bg-layer-1); }
+.wsm-confidence { margin: 0 0 0 auto; color: var(--dsw-alias-label-secondary); font-size: 12px; white-space: nowrap; }
+.wsm-tags-field { margin-top: 12px; }
+.wsm-tags, .wsm-tag-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.wsm-tag-chips:empty { display: none; }
+.wsm-tag { display: inline-flex; align-items: center; gap: 7px; min-height: 29px; max-width: 100%; padding: 3px 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font-size: 12px; }
+.wsm-tag > span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsm-tag button { display: inline-flex; justify-content: center; align-items: center; min-width: 20px; height: 23px; margin: -3px -5px -3px 0; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 15px; }
+.wsm-tag button:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-border-l2); }
+.wsm-tag-add { min-height: 29px; padding: 4px 9px; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.wsm-tag-input { min-width: 0; width: 160px; height: 29px; border: 1px solid var(--dsw-alias-brand-primary); border-radius: 4px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); padding: 4px 8px; font-size: 12px; }
+.wsm-error { margin: 5px 0 0; color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+[aria-invalid="true"] { outline: 1px solid var(--dsw-alias-state-error-primary); outline-offset: 2px; }
+
+.wsm-editor-shell { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 260px; margin: 0 36px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.wsm-editor-head { display: flex; align-items: center; flex: 0 0 50px; gap: 20px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.wsm-editor-tabs { display: flex; align-self: stretch; gap: 24px; }
+.wsm-editor-tabs button { position: relative; min-width: 45px; font-size: 14px; }
+.wsm-editor-format { margin-left: auto; color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.wsm-body-error { padding-bottom: 5px; }
+.wsm-editor { display: grid; grid-template-columns: 37px minmax(0, 1fr); flex: 1 1 auto; min-height: 200px; overflow: hidden; }
+.wsm-gutter { overflow: hidden; user-select: none; text-align: right; color: var(--dsw-alias-label-secondary); border-right: 1px solid var(--dsw-alias-border-l1); font-family: var(--wsm-mono); font-size: 13px; line-height: 23px; }
+.wsm-gutter > div { padding: 14px 10px 24px 0; will-change: transform; }
+.wsm-gutter-line { min-height: 23px; }
+.wsm-code-area { position: relative; min-width: 0; min-height: 0; }
+.wsm-code-highlight, #body-editor { tab-size: 2; font: 14px/23px var(--wsm-mono); font-variant-ligatures: none; letter-spacing: 0; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; padding: 14px 16px 24px; border: 0; margin: 0; }
+.wsm-code-highlight { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; color: var(--dsw-alias-label-primary); }
+.wsm-code-line { display: block; min-height: 23px; }
+.wsm-syntax-heading, .wsm-syntax-mark { color: color-mix(in srgb, var(--dsw-alias-brand-primary) 72%, var(--dsw-alias-label-primary)); }
+.wsm-syntax-code { color: color-mix(in srgb, var(--dsw-alias-brand-primary) 66%, var(--dsw-alias-label-primary)); }
+#body-editor { position: relative; z-index: 1; display: block; height: 100%; width: 100%; min-height: 200px; resize: none; background: transparent; color: var(--dsw-alias-label-primary); caret-color: var(--dsw-alias-brand-primary); overflow: auto; outline-offset: -2px; }
+.panel[data-highlighted="true"] #body-editor { color: transparent; -webkit-text-fill-color: transparent; }
+.panel[data-highlighted="true"] #body-editor::selection { color: transparent; -webkit-text-fill-color: transparent; }
+.wsm-preview { flex: 1 1 auto; min-height: 200px; overflow: auto; padding: 21px 4px 40px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.wsm-preview article { max-width: 76ch; }
+.wsm-preview h1, .wsm-preview h2, .wsm-preview h3, .wsm-preview h4 { line-height: 1.5; margin: 1.6em 0 .6em; }
+.wsm-preview h1:first-child, .wsm-preview h2:first-child, .wsm-preview h3:first-child { margin-top: 0; }
+.wsm-preview h1 { font-size: 25px; } .wsm-preview h2 { font-size: 20px; } .wsm-preview h3 { font-size: 17px; }
+.wsm-preview p { margin: 0 0 1em; }
+.wsm-preview ul, .wsm-preview ol { padding-left: 1.6em; margin: 0 0 1em; }
+.wsm-preview li { margin: .3em 0; }
+.wsm-preview a { color: color-mix(in srgb, var(--dsw-alias-brand-primary) 72%, var(--dsw-alias-label-primary)); text-underline-offset: 3px; }
+.wsm-preview code { font: .92em/1.65 var(--wsm-mono); background: var(--dsw-alias-bg-layer-2); padding: 2px 4px; border-radius: 3px; }
+.wsm-preview pre { margin: 0 0 1.3em; padding: 14px 16px; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); border-radius: 5px; overflow-x: auto; white-space: pre; }
+.wsm-preview pre code { background: transparent; padding: 0; }
+.wsm-preview blockquote { margin: 0 0 1em; padding: 2px 16px; border-left: 2px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
+.wsm-preview blockquote p:last-child { margin-bottom: 0; }
+.wsm-preview hr { border: 0; border-top: 1px solid var(--dsw-alias-border-l1); margin: 24px 0; }
+
+/* Persistent save bar. The file editor is contextual and never nests cards. */
+.wsm-footer { position: relative; display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 8px 20px; min-height: 90px; padding: 16px 36px; border-top: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-base); }
+.wsm-footer-meta { flex: 1 1 160px; min-width: 0; }
+.wsm-file-trigger { display: flex; align-items: center; gap: 9px; max-width: 100%; min-height: 26px; padding: 1px 0; background: transparent; border: 0; color: var(--dsw-alias-label-primary); font-size: 12px; text-align: left; }
+.wsm-file-trigger:hover { color: var(--dsw-alias-brand-primary); }
+.wsm-file-location { padding: 2px 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 4px; white-space: nowrap; }
+.wsm-file-slash { color: var(--dsw-alias-label-secondary); }
+.wsm-file-trigger .file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsm-modified { display: block; margin-top: 4px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.wsm-footer-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 10px; flex-wrap: nowrap; margin-left: auto; }
+.wsm-footer-actions .wsm-btn { min-height: 36px; min-width: 78px; }
+.wsm-footer-actions .primary { min-width: 106px; }
+.wsm-unsaved { white-space: nowrap; margin-right: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.wsm-unsaved[data-state="dirty"] { color: var(--dsw-alias-state-warn-primary); }
+.wsm-unsaved[data-state="error"] { color: var(--dsw-alias-state-error-primary); }
+.wsm-unsaved[data-state="success"] { color: var(--dsw-alias-state-success-primary); }
+.wsm-save-error { flex: 0 0 100%; color: var(--dsw-alias-state-error-primary); font-size: 12px; }
+.wsm-file-popover { position: absolute; bottom: calc(100% + 8px); left: 30px; width: min(390px, calc(100% - 40px)); max-height: min(410px, max(120px, calc(100dvh - 210px))); overflow-y: auto; z-index: 5; padding: 18px; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; box-shadow: 0 10px 30px color-mix(in srgb, var(--dsw-alias-bg-canvas) 70%, transparent); }
+.wsm-popover-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.wsm-popover-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.wsm-file-popover label { display: block; margin-bottom: 7px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.wsm-slug-field { display: flex; gap: 7px; align-items: center; font-family: var(--wsm-mono); font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.wsm-slug-field .mono { min-width: 0; font-family: var(--wsm-mono); font-size: 12px; }
+.wsm-file-facts { display: grid; grid-template-columns: 72px minmax(0,1fr); gap: 9px 8px; margin: 18px 0; font-size: 12px; }
+.wsm-file-facts dt { color: var(--dsw-alias-label-secondary); } .wsm-file-facts dd { margin: 0; overflow-wrap: anywhere; }
+.wsm-footer-actions .wsm-promote { min-width: 0; }
+.wsm-dialog { max-width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); box-shadow: 0 20px 70px var(--dsw-alias-bg-canvas); }
+.wsm-dialog::backdrop { background: color-mix(in srgb, var(--dsw-alias-bg-canvas) 70%, transparent); }
+.wsm-dialog h2 { margin: 0 0 10px; font-size: 18px; font-weight: 600; }
+.wsm-dialog p { margin: 0 0 24px; color: var(--dsw-alias-label-secondary); font-size: 14px; line-height: 1.7; }
+.wsm-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.wsm-toast { position: absolute; z-index: 10; bottom: 20px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 8px 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); font-size: 12px; pointer-events: none; }
+
+/* Container-driven reflow also works when the preview is 420px wide. */
+.panel[data-layout="single"] .panel-body { grid-template-columns: minmax(0,1fr); }
+.panel[data-layout="single"] .list-pane { border-right: 0; }
+.panel[data-layout="single"][data-view="detail"] .list-pane { display: none; }
+.panel[data-layout="single"][data-view="list"] .detail-pane { display: none; }
+.panel[data-layout="single"] .wsm-brand { display: none; }
+.panel[data-layout="single"] .wsm-title { border: 0; padding: 0; color: var(--dsw-alias-label-primary); font-size: 16px; }
+.panel[data-layout="single"] .wsm-header { flex-basis: 55px; padding: 0 18px; gap: 12px; }
+.panel[data-layout="single"] .wsm-header-tools { gap: 12px; }
+.panel[data-layout="single"] .wsm-workspace { font-size: 11px; max-width: 135px; }
+.panel[data-layout="single"] .wsm-header .wsm-btn { min-height: 29px; padding: 4px 9px; font-size: 12px; }
+.panel[data-layout="single"] .wsm-crumbs { display: flex; }
+.panel[data-layout="single"] .wsm-doc-head { padding: 18px 20px 16px; }
+.panel[data-layout="single"] .wsm-detail-title { font-size: 22px; line-height: 1.45; min-height: 36px; max-height: 132px; }
+.panel[data-layout="single"] .wsm-description { font-size: 13px; }
+.panel[data-layout="single"] .wsm-property-row { gap: 10px; margin-top: 13px; }
+.panel[data-layout="single"] .wsm-confidence { flex: 1 0 100%; margin-left: 0; font-size: 11px; }
+.panel[data-layout="single"] .wsm-editor-shell { margin: 0 20px; }
+.panel[data-layout="single"] .wsm-editor-head { flex-basis: 44px; gap: 10px; }
+.panel[data-layout="single"] .wsm-editor-tabs { gap: 16px; }
+.panel[data-layout="single"] .wsm-editor-format { font-size: 11px; }
+.panel[data-layout="single"] .wsm-editor { grid-template-columns: 30px minmax(0,1fr); }
+.panel[data-layout="single"] .wsm-code-highlight, .panel[data-layout="single"] #body-editor { font-size: 13px; padding-left: 10px; padding-right: 8px; }
+.panel[data-layout="single"] .wsm-footer { padding: 12px 20px; gap: 9px; }
+.panel[data-layout="single"] .wsm-footer-meta { flex: 0 0 100%; }
+.panel[data-layout="single"] .wsm-footer-actions { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 8px; width: 100%; }
+.panel[data-layout="single"] .wsm-unsaved { grid-column: 1 / -1; margin: 0; }
+.panel[data-layout="single"] .wsm-footer-actions .wsm-btn { min-width: 64px; padding-left: 13px; padding-right: 13px; }
+.panel[data-layout="single"] .wsm-footer-actions .primary { min-width: 100px; }
+.panel[data-layout="single"] .wsm-footer-actions .wsm-promote { min-width: 0; padding-left: 6px; padding-right: 6px; font-size: 12px; }
+.panel[data-layout="single"] .wsm-file-popover { left: 20px; }
+.panel[data-mode="wide"] .wsm-doc-head { padding-left: 24px; padding-right: 24px; }
+.panel[data-mode="wide"] .wsm-editor-shell { margin-left: 24px; margin-right: 24px; }
+.panel[data-mode="wide"] .wsm-footer { padding-left: 24px; padding-right: 24px; }
+.panel[data-mode="wide"] .wsm-detail-title { font-size: 23px; }
+.panel[data-mode="wide"] .wsm-confidence { margin-left: 0; flex: 1 0 100%; }
+.panel[data-mode="wide"] .wsm-footer-meta { flex-basis: 100%; }
+.panel[data-mode="wide"] .wsm-footer-actions { width: 100%; }
+.panel[data-mode="wide"] .wsm-unsaved { flex: 1; }
+.panel[data-fullscreen="true"] .list-pane, .panel[data-fullscreen="true"] .wsm-doc-head { display: none; }
+.panel[data-fullscreen="true"] .detail-pane { display: flex; grid-column: 1 / -1; }
+.panel[data-fullscreen="true"] .wsm-editor-shell { margin-top: 12px; border-top: 0; }
+@media (max-width: 520px) {
+  .stage-bar { gap: 7px; } .stage-label { display: none; } .stage-save { margin-left: 2px; }
+  .stage-bar button { padding-left: 6px; padding-right: 6px; }
+  .wsm-dialog-actions { gap: 7px; } .wsm-dialog-actions .wsm-btn { font-size: 12px; padding: 6px 10px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+@media (forced-colors: active) {
+  .wsm-code-highlight { display: none; }
+  .panel[data-highlighted="true"] #body-editor { color: CanvasText; -webkit-text-fill-color: CanvasText; }
+  .wsm-item[aria-selected="true"] { border-left: 3px solid Highlight; }
+}
+
+  </style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-bar" aria-label="静态预览控制">
+    <span class="stage-label">预览</span>
+    <div class="stage-modes" role="group" aria-label="预览宽度">
+      <button type="button" data-mode="desktop" aria-pressed="true">桌面</button>
+      <button type="button" data-mode="wide" aria-pressed="false">宽屏 860</button>
+      <button type="button" data-mode="narrow" aria-pressed="false">侧栏 420</button>
+    </div>
+    <label class="stage-save">保存反馈
+      <select id="preview-save-state" aria-label="预览保存结果">
+        <option value="success">正常</option>
+        <option value="failure">失败</option>
+      </select>
+    </label>
+  </div>
+
+  <main class="panel" id="panel" data-mode="desktop" data-layout="split" data-view="detail" data-fullscreen="false">
+    <header class="wsm-header">
+      <div class="wsm-header-top">
+        <span class="wsm-brand">DeepSeek Harness</span>
+        <span class="wsm-title">记忆管理</span>
+      </div>
+      <div class="wsm-header-tools">
+        <span class="wsm-workspace" title="C:\Users\lenovo\Documents\DSH-Workspace">DSH-Workspace</span>
+        <button class="wsm-btn" type="button" data-action="refresh">刷新</button>
+      </div>
+    </header>
+
+    <div class="panel-body">
+      <aside class="list-pane" aria-label="记忆列表">
+        <div class="wsm-list-tools">
+          <div class="wsm-tabs" role="tablist" aria-label="记忆状态">
+            <button type="button" id="tab-confirmed" role="tab" aria-controls="memory-list-region" aria-selected="true" tabindex="0" data-tab="confirmed">已确认 <span id="confirmed-count">5</span></button>
+            <button type="button" id="tab-pending" role="tab" aria-controls="memory-list-region" aria-selected="false" tabindex="-1" data-tab="pending">待确认 <span id="pending-count">0</span></button>
+          </div>
+          <input class="wsm-search" id="search" type="search" placeholder="搜索记忆…" aria-label="搜索标题、摘要、标签与正文" autocomplete="off">
+        </div>
+        <div class="wsm-list-region" id="memory-list-region" role="tabpanel" aria-labelledby="tab-confirmed">
+          <div class="wsm-sr-only" id="list-count" role="status"></div>
+          <div class="list-scroll" id="list" role="listbox" aria-label="已确认记忆"></div>
+        </div>
+        <div class="wsm-agents-row">
+          <div class="wsm-agents-summary">
+            <span class="wsm-agents-name">AGENTS.md</span>
+            <span>2471 B · 5 节</span>
+          </div>
+          <div class="wsm-agents-actions">
+            <select class="wsm-select" id="agents-editor" aria-label="AGENTS.md 打开方式">
+              <option value="auto">自动</option>
+              <option value="typora">Typora</option>
+              <option value="vscode">VS Code</option>
+              <option value="system">系统默认</option>
+            </select>
+            <button class="wsm-btn" type="button" data-action="open-agents">打开</button>
+          </div>
+        </div>
+      </aside>
+
+      <section class="detail-pane" id="detail" aria-label="记忆详情">
+        <div class="wsm-detail-empty" id="detail-empty" hidden>选择一条记忆</div>
+        <div class="wsm-detail-document" id="document">
+          <div class="wsm-detail-main" id="detail-main">
+            <div class="wsm-doc-head">
+              <div class="wsm-crumbs">
+                <button class="wsm-text-btn" type="button" data-action="back">返回列表</button>
+              </div>
+              <div class="wsm-field wsm-title-field">
+                <label class="wsm-sr-only" for="memory-title">记忆标题</label>
+                <textarea class="wsm-input wsm-detail-title" id="memory-title" data-field="title" rows="1" placeholder="记忆标题" spellcheck="false" aria-describedby="title-error"></textarea>
+                <p class="wsm-error" id="title-error" hidden></p>
+              </div>
+              <div class="wsm-field wsm-description-field">
+                <label class="wsm-sr-only" for="memory-description">摘要</label>
+                <textarea class="wsm-input wsm-description" id="memory-description" data-field="description" rows="1" placeholder="添加摘要" spellcheck="false" aria-describedby="description-error"></textarea>
+                <p class="wsm-error" id="description-error" hidden></p>
+              </div>
+              <div class="wsm-property-row">
+                <div class="wsm-field">
+                  <label class="wsm-sr-only" for="memory-type">记忆分类</label>
+                  <select class="wsm-select" id="memory-type" data-field="type" aria-describedby="type-error">
+                    <option value="user">用户偏好</option>
+                    <option value="feedback">纠正反馈</option>
+                    <option value="project">项目决策</option>
+                    <option value="reference">参考索引</option>
+                  </select>
+                  <p class="wsm-error" id="type-error" hidden></p>
+                </div>
+                <div class="wsm-field">
+                  <label class="wsm-sr-only" for="memory-scope">适用范围</label>
+                  <select class="wsm-select" id="memory-scope" data-field="scope" aria-describedby="scope-error" title="适用范围；不会自动移动文件">
+                    <option value="project">仅本项目</option>
+                    <option value="global">跨项目</option>
+                  </select>
+                  <p class="wsm-error" id="scope-error" hidden></p>
+                </div>
+                <p class="wsm-confidence" id="confidence" title="由模型在写入时给出的自评，不是正确率"></p>
+              </div>
+              <div class="wsm-field wsm-tags-field">
+                <div class="wsm-tags" aria-label="记忆标签">
+                  <div class="wsm-tag-chips" id="tags"></div>
+                  <button class="wsm-btn wsm-tag-add" id="add-tag" type="button" data-action="add-tag">+ 添加</button>
+                  <input class="wsm-tag-input" id="tag-input" type="text" placeholder="标签，Enter 添加" aria-label="添加标签" aria-describedby="tags-error" autocomplete="off" hidden>
+                </div>
+                <p class="wsm-error" id="tags-error" hidden></p>
+              </div>
+            </div>
+
+            <div class="wsm-editor-shell">
+              <div class="wsm-editor-head">
+                <div class="wsm-editor-tabs" role="tablist" aria-label="正文显示方式">
+                  <button class="wsm-text-btn" type="button" id="tab-edit" role="tab" aria-selected="true" aria-controls="editor-surface" tabindex="0" data-body-view="edit">编辑</button>
+                  <button class="wsm-text-btn" type="button" id="tab-preview" role="tab" aria-selected="false" aria-controls="preview-surface" tabindex="-1" data-body-view="preview">预览</button>
+                </div>
+                <span class="wsm-editor-format">Markdown</span>
+                <button class="wsm-btn wsm-btn-small" id="fullscreen" type="button" data-action="fullscreen" aria-pressed="false">全屏</button>
+              </div>
+              <p class="wsm-error wsm-body-error" id="body-error" hidden></p>
+              <div class="wsm-editor" id="editor-surface" role="tabpanel" aria-labelledby="tab-edit">
+                <div class="wsm-gutter" aria-hidden="true"><div id="gutter"></div></div>
+                <div class="wsm-code-area">
+                  <pre class="wsm-code-highlight" id="highlight" aria-hidden="true"></pre>
+                  <label class="wsm-sr-only" for="body-editor">Markdown 正文</label>
+                  <textarea id="body-editor" data-field="body" spellcheck="false" wrap="soft" aria-describedby="body-error"></textarea>
+                </div>
+              </div>
+              <div class="wsm-preview" id="preview-surface" role="tabpanel" aria-labelledby="tab-preview" tabindex="0" hidden><article id="markdown-preview"></article></div>
+            </div>
+          </div>
+
+          <footer class="wsm-footer">
+            <div class="wsm-footer-meta">
+              <button class="wsm-file-trigger" id="file-trigger" type="button" data-action="file" aria-haspopup="dialog" aria-controls="file-popover" aria-expanded="false">
+                <span class="wsm-file-location">本项目</span><span class="wsm-file-slash" aria-hidden="true">/</span><span class="file" id="file-name"></span>
+              </button>
+              <time class="wsm-modified" id="modified"></time>
+            </div>
+            <div class="wsm-footer-actions">
+              <span class="wsm-unsaved" id="save-status" role="status" aria-live="polite"></span>
+              <button class="wsm-btn wsm-promote" id="promote" type="button" data-action="promote" title="沿用原有搬移操作：写入全局 AGENTS.md，并从项目库移出">写入 AGENTS.md</button>
+              <button class="wsm-btn" id="cancel" type="button" data-action="cancel">取消</button>
+              <button class="wsm-btn wsm-pending-action" id="reject" type="button" data-action="reject" hidden>丢弃</button>
+              <button class="wsm-btn primary" id="save" type="button" data-action="save" title="保存更改 · Ctrl / ⌘ S">保存更改</button>
+            </div>
+            <div class="wsm-save-error" id="save-error" role="alert" hidden></div>
+
+            <section class="wsm-file-popover" id="file-popover" role="dialog" aria-labelledby="file-title" hidden>
+              <div class="wsm-popover-head"><h2 id="file-title">文件信息</h2><button class="wsm-text-btn" type="button" data-action="close-file">关闭</button></div>
+              <div class="wsm-field">
+                <label for="memory-slug">文件名</label>
+                <div class="wsm-slug-field"><input class="wsm-input mono" id="memory-slug" data-field="slug" type="text" spellcheck="false" autocomplete="off" aria-describedby="slug-error"><span>.md</span></div>
+                <p class="wsm-error" id="slug-error" hidden></p>
+              </div>
+              <dl class="wsm-file-facts"><dt>存放位置</dt><dd>本项目记忆库</dd><dt>更新于</dt><dd id="file-modified"></dd></dl>
+            </section>
+          </footer>
+        </div>
+      </section>
+    </div>
+    <div class="wsm-toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </main>
+</div>
+
+<dialog class="wsm-dialog" id="unsaved-dialog" aria-labelledby="unsaved-title" aria-describedby="unsaved-description">
+  <h2 id="unsaved-title">保存当前修改？</h2>
+  <p id="unsaved-description">当前记忆有未保存的修改。</p>
+  <div class="wsm-dialog-actions">
+    <button class="wsm-btn" id="guard-continue" type="button" data-guard="continue" autofocus>继续编辑</button>
+    <button class="wsm-btn" type="button" data-guard="discard">放弃修改</button>
+    <button class="wsm-btn primary" type="button" data-guard="save">保存并继续</button>
+  </div>
+</dialog>
+<dialog class="wsm-dialog" id="notice-dialog" aria-labelledby="notice-title" aria-describedby="notice-description">
+  <h2 id="notice-title"></h2>
+  <p id="notice-description"></p>
+  <div class="wsm-dialog-actions"><button class="wsm-btn primary" type="button" id="notice-close" autofocus>知道了</button></div>
+</dialog>
+<script type="application/json" id="data">
+{
+  "memories": [
+    {
+      "id": "no-explanatory-text-in-ui",
+      "title": "界面里不要自行添加解释性说明文字",
+      "description": "界面只呈现数据与控件，不加解释性文案；需要的解释写进 README",
+      "type": "feedback",
+      "scope": "global",
+      "tags": ["lesson", "README"],
+      "confidence": 0.95,
+      "hits": 0,
+      "modified": "2026-11-02T02:28:00.000Z",
+      "body": "**错误模式**：在面板里加「口径说明/小字解释/提示性文案」，以为能帮用户理解。\n\n**修正做法**：用户明确要求，UI 只呈现数据与控件，不要加解释性文案（例如「输入只算未命中的 prompt 一类」）。需要的解释写进 README/文档，而不是界面。改版时若想加提示语，先问。"
+    },
+    {
+      "id": "small-verifiable-ui-refactors",
+      "title": "界面重构要小步、可验证；大改一次性替换样式层会被回滚",
+      "description": "界面重构要小步可验证；一次性换样式层会被用户否决并回滚",
+      "type": "feedback",
+      "scope": "global",
+      "tags": ["decision", "发布", "回滚"],
+      "confidence": 0.9,
+      "hits": 0,
+      "modified": "2026-11-02T06:27:22.000Z",
+      "body": "**选了什么**：1.5.0 整体换样式层（tasteskill v2 Achromatic ledger）被用户否决并回滚，发布 1.5.1（内容=1.4.3 界面）；重构代码留在分支 design/achromatic-ledger（已推远端）。\n\n**为什么**：用户反馈「bug 太多」。风险点复盘：①一次性整体替换 CSS 字符串（约 5.9KB），无法逐项验证；②同时改了字阶、间距、配色、CELL_PITCH(14→16)、class 结构与动画五个变量；③宿主内无法截图验证渲染结果，只能靠用户肉眼。\n\n今后界面类改动应：一次只动一个变量（先字阶、再间距、再配色），每次让用户刷新确认。"
+    },
+    {
+      "id": "pnpm-remove-link-deletes-target",
+      "title": "pnpm 删除 link(junction) 依赖会顺链删掉工作区，含 .git 内部文件",
+      "description": "pnpm 删 link 依赖会顺着 junction 删穿源目录，换源前必须先 rmdir 断链",
+      "type": "project",
+      "scope": "global",
+      "tags": ["lesson", "提交", "删除", "依赖"],
+      "confidence": 0.95,
+      "hits": 0,
+      "modified": "2026-11-02T06:16:00.000Z",
+      "body": "**坑**：`remove_bundle` 对以 link 方式安装的插件，会让 pnpm 顺着 Windows junction 删掉**目标目录**（也就是我的工作区源码），`.git` 内部文件也一起没了。\n\n**正确做法**：换源/卸载前先 `rmdir <profile>/node_modules/<pkg>`（不跟随链接）断开，再执行 remove；或先 `link:` 换成 registry 版本再卸。"
+    },
+    {
+      "id": "hot-reload-local-bundle-generation",
+      "title": "本地 bundle 改完代码不热更，如何不重启换模块代次",
+      "description": "本地 bundle 改完不热更：disable→enable 切一次插件行来换模块代次",
+      "type": "project",
+      "scope": "global",
+      "tags": ["lesson", "删除"],
+      "confidence": 0.9,
+      "hits": 0,
+      "modified": "2026-11-02T06:16:00.000Z",
+      "body": "**症状**：改完本地 bundle 的 `lib/*.js`，刷新页面没变化——DSH 缓存了模块代次，文件改了但没重新加载。\n\n**做法**：用 `plugin_manager` 对插件的 enabled 先 `false` 再 `true`（切一次插件行），模块代次会重新加载；比重启整个应用轻得多。客户端半区仍然需要刷新页面（`Ctrl+R`）。"
+    },
+    {
+      "id": "npm-publish-every-4-hours-not-per-change",
+      "title": "npm 发布：每 4 小时批量发，版本号与 CHANGELOG 在发布时自动生成（全局规则）",
+      "description": "规则（用户 2026-11-02 两次澄清，适用于**所有** npm 发布的插件）",
+      "type": "feedback",
+      "scope": "global",
+      "tags": ["发布", "npm", "工作流", "GitHub Actions", "版本号", "CHANGELOG"],
+      "confidence": 0.97,
+      "hits": 0,
+      "modified": "2026-11-02T06:44:58.000Z",
+      "body": "## 规则（用户 2026-11-02 两次澄清，适用于**所有** npm 发布的插件）\n\n1. **不要每次改动就发 npm**，改成**每 4 小时批量发布**。\n2. **版本号也不要在改动时升**——版本号在**发布那一刻**才升（patch），一次性代表这一批改动。\n3. 日常改动只做：跑测试 → `git commit` → `git push`。**不手动改 version、不手写 CHANGELOG**。\n\n## 门禁：判断「有没有待发布」，用 git tag 而不是版本号\n\n每次发布完成后给发布提交打 tag `v<version>`。下次判断：\n`git rev-list --count $(git describe --tags --abbrev=0 --match 'v*')..HEAD` > 0 → 有待发布。\n\n## 首选实现：GitHub Actions\n\n`cron: '0 */4 * * *'` + `workflow_dispatch`，步骤：checkout → gate → bump + 生成 CHANGELOG → 测试 → 推送 → `npm publish` → 打 tag → 轮询 registry。\n\n## 兜底：本地脚本\n\n`tools/publish-pending.ps1` 实现同一套逻辑，只在机器开机时生效。"
+    }
+  ]
+}
+</script>
+<script>
+(function () {
+  'use strict';
+
+  // This is deliberately a session-only preview. No filesystem or host API calls.
+  const source = JSON.parse(document.getElementById('data').textContent);
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const collections = { confirmed: clone(source.memories || []), pending: clone(source.pending || []) };
+  const TYPE_LABEL = { user: '用户偏好', feedback: '纠正反馈', project: '项目决策', reference: '参考索引' };
+  const $ = (id) => document.getElementById(id);
+  const panel = $('panel');
+  const controls = {
+    title: $('memory-title'), description: $('memory-description'), type: $('memory-type'),
+    scope: $('memory-scope'), slug: $('memory-slug'), body: $('body-editor'),
+  };
+  const state = {
+    tab: 'confirmed', query: '', selectedId: null, draft: null, baseline: null,
+    bodyView: 'edit', saving: false, errors: {}, saveError: '', flash: '',
+    pendingAction: null, narrowDetail: true, fullscreen: false, previewScroll: 0,
+  };
+  let editorFrame = 0;
+  let layoutFrame = 0;
+  let toastTimer = 0;
+  let flashTimer = 0;
+  let guardFocus = null;
+
+  function escapeHTML(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[char]);
+  }
+
+  function toDraft(memory) {
+    return {
+      slug: String(memory.slug || memory.id || ''), title: String(memory.title || ''),
+      description: String(memory.description || ''), type: memory.type || 'project',
+      scope: memory.scope || 'project', tags: [...(memory.tags || [])], body: String(memory.body || ''),
+    };
+  }
+
+  function sameDraft(a, b) {
+    return !!a && !!b && a.slug === b.slug && a.title === b.title &&
+      a.description === b.description && a.type === b.type && a.scope === b.scope &&
+      a.body === b.body && JSON.stringify(a.tags) === JSON.stringify(b.tags);
+  }
+
+  function hasPendingTag() { return !$('tag-input').hidden && !!$('tag-input').value.trim(); }
+  function isDirty() { return !!state.draft && (!sameDraft(state.draft, state.baseline) || hasPendingTag()); }
+  function currentMemory() { return collections[state.tab].find((memory) => memory.id === state.selectedId); }
+
+  function matchesQuery(memory, query) {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return true;
+    return [memory.title, memory.description, memory.slug || memory.id, memory.body, ...(memory.tags || [])]
+      .join('\n').toLocaleLowerCase().includes(needle);
+  }
+
+  function visibleMemories(query = state.query) {
+    return collections[state.tab].filter((memory) => matchesQuery(memory, query));
+  }
+
+  function formatTime(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '—';
+    const p = (number) => String(number).padStart(2, '0');
+    return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
+  }
+
+  function validateDraft(draft) {
+    const errors = {};
+    if (!draft.title.trim()) errors.title = '标题不能为空。';
+    else if (draft.title.length > 200) errors.title = '标题不能超过 200 个字符。';
+    if (draft.description.length > 120) errors.description = '摘要不能超过 120 个字符。';
+    if (!draft.body.trim()) errors.body = '正文不能为空。';
+    else if (draft.body.length > 20000) errors.body = '正文不能超过 20000 个字符。';
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(draft.slug)) errors.slug = '使用小写英文字母、数字与连字符，且不能以连字符开头。';
+    else if (Object.values(collections).flat().some((memory) => memory !== currentMemory() && (memory.slug || memory.id) === draft.slug)) errors.slug = '已有同名记忆，请换一个文件名。';
+    if (!Object.hasOwn(TYPE_LABEL, draft.type)) errors.type = '请选择有效的记忆分类。';
+    if (!['project', 'global'].includes(draft.scope)) errors.scope = '请选择有效的适用范围。';
+    if (draft.tags.length > 20) errors.tags = '最多添加 20 个标签。';
+    else if (draft.tags.some((tag) => !tag.trim() || tag.length > 40 || /[,\]]/.test(tag))) errors.tags = '标签需为 1–40 个字符，不能包含英文逗号或 ]。';
+    return errors;
+  }
+
+  function showErrors(errors) {
+    state.errors = errors;
+    for (const field of ['title', 'description', 'type', 'scope', 'tags', 'slug', 'body']) {
+      const message = $(field + '-error');
+      message.textContent = errors[field] || '';
+      message.hidden = !errors[field];
+      const control = field === 'tags' ? $('tag-input') : controls[field];
+      if (errors[field]) control.setAttribute('aria-invalid', 'true');
+      else control.removeAttribute('aria-invalid');
+    }
+  }
+
+  function focusFirstError() {
+    const field = Object.keys(state.errors)[0];
+    if (!field) return;
+    if (field === 'slug') setFileOpen(true, false);
+    if (field === 'tags') openTagInput();
+    if (field === 'body') setBodyView('edit');
+    const control = field === 'tags' ? $('tag-input') : controls[field];
+    control.focus();
+    if (typeof control.scrollIntoView === 'function') control.scrollIntoView({ block: 'nearest' });
+  }
+
+  // Markdown is rendered from an allowlist, never from user-supplied HTML.
+  // Links cannot use javascript:, data:, file: or embedded control characters.
+  function safeLink(raw) {
+    const value = raw.trim();
+    if (/[\u0000-\u0020\u007f]/.test(value)) return '';
+    if (/^https?:\/\//i.test(value)) {
+      try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : ''; }
+      catch (_) { return ''; }
+    }
+    if (/^mailto:[^<>]+$/i.test(value) || /^#[\w-]+$/.test(value)) return value;
+    return '';
+  }
+
+  function inlineMarkdown(text, depth = 0) {
+    if (depth > 3) return escapeHTML(text);
+    const token = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|__([^_\n]+)__|\[([^\]\n]+)\]\(([^\s)]+)\)|\*([^*\n]+)\*|~~([^~\n]+)~~/g;
+    let result = '';
+    let cursor = 0;
+    let match;
+    while ((match = token.exec(text))) {
+      result += escapeHTML(text.slice(cursor, match.index));
+      if (match[1] != null) result += `<code>${escapeHTML(match[1])}</code>`;
+      else if (match[2] != null || match[3] != null) result += `<strong>${inlineMarkdown(match[2] || match[3], depth + 1)}</strong>`;
+      else if (match[4] != null) {
+        const href = safeLink(match[5]);
+        result += href ? `<a href="${escapeHTML(href)}" target="_blank" rel="noopener noreferrer">${inlineMarkdown(match[4], depth + 1)}</a>` : escapeHTML(match[0]);
+      } else if (match[6] != null) result += `<em>${inlineMarkdown(match[6], depth + 1)}</em>`;
+      else result += `<del>${escapeHTML(match[7])}</del>`;
+      cursor = token.lastIndex;
+    }
+    return result + escapeHTML(text.slice(cursor));
+  }
+
+  function renderMarkdown(markdown, depth = 0) {
+    if (depth > 3) return `<p>${escapeHTML(markdown)}</p>`;
+    const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
+    const blocks = [];
+    let paragraph = [];
+    const flush = () => {
+      if (paragraph.length) blocks.push(`<p>${inlineMarkdown(paragraph.join('\n')).replace(/\n/g, '<br>')}</p>`);
+      paragraph = [];
+    };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const fence = line.match(/^\s*(`{3,}|~{3,})([\w+-]*)\s*$/);
+      if (fence) {
+        flush();
+        const code = [];
+        const closing = new RegExp('^\\s*' + fence[1][0] + '{' + fence[1].length + ',}\\s*$');
+        while (++i < lines.length && !closing.test(lines[i])) code.push(lines[i]);
+        blocks.push(`<pre><code>${escapeHTML(code.join('\n'))}</code></pre>`);
+        continue;
+      }
+      if (!line.trim()) { flush(); continue; }
+      const heading = line.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        flush(); const level = heading[1].length;
+        blocks.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`); continue;
+      }
+      if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flush(); blocks.push('<hr>'); continue; }
+      if (/^\s*>/.test(line)) {
+        flush(); const quoted = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) quoted.push(lines[i++].replace(/^\s*> ?/, ''));
+        i--; blocks.push(`<blockquote>${renderMarkdown(quoted.join('\n'), depth + 1)}</blockquote>`); continue;
+      }
+      const listItem = line.match(/^\s*(?:([-+*])|(\d+)[.)])\s+(.+)$/);
+      if (listItem) {
+        flush(); const ordered = !!listItem[2]; const items = [];
+        while (i < lines.length) {
+          const item = lines[i].match(/^\s*(?:([-+*])|(\d+)[.)])\s+(.+)$/);
+          if (!item || !!item[2] !== ordered) break;
+          let content = item[3]; i++;
+          while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^\s*(?:[-+*]|\d+[.)])\s/.test(lines[i])) content += '\n' + lines[i++].trim();
+          items.push(`<li>${inlineMarkdown(content).replace(/\n/g, '<br>')}</li>`);
+        }
+        i--;
+        const tag = ordered ? 'ol' : 'ul';
+        const start = ordered && Number(listItem[2]) !== 1 ? ` start="${Number(listItem[2])}"` : '';
+        blocks.push(`<${tag}${start}>${items.join('')}</${tag}>`); continue;
+      }
+      paragraph.push(line);
+    }
+    flush();
+    return blocks.join('\n');
+  }
+
+  function highlightLine(line) {
+    if (/^#{1,6}\s/.test(line)) return `<span class="wsm-syntax-heading">${escapeHTML(line)}</span>`;
+    const token = /`[^`]*`|\*\*[^*]+\*\*/g;
+    let output = ''; let cursor = 0; let match;
+    while ((match = token.exec(line))) {
+      output += escapeHTML(line.slice(cursor, match.index));
+      const kind = match[0][0] === '`' ? 'code' : 'mark';
+      output += `<span class="wsm-syntax-${kind}">${escapeHTML(match[0])}</span>`;
+      cursor = token.lastIndex;
+    }
+    return output + escapeHTML(line.slice(cursor));
+  }
+
+  function syncEditorScroll() {
+    $('highlight').scrollTop = controls.body.scrollTop;
+    $('highlight').scrollLeft = controls.body.scrollLeft;
+    $('gutter').style.transform = `translateY(${-controls.body.scrollTop}px)`;
+  }
+
+  function syncEditorLayout() {
+    const width = controls.body.clientWidth;
+    if (width) $('highlight').style.width = width + 'px';
+    const rows = $('highlight').children;
+    const gutterRows = $('gutter').children;
+    // Wrapped physical lines share one logical number; match actual row heights.
+    const heights = Array.from(rows, (row) => row.getBoundingClientRect().height || 23);
+    // Batch reads before writes to avoid repeated layout work on long documents.
+    for (let i = 0; i < heights.length; i++) if (gutterRows[i]) gutterRows[i].style.height = heights[i] + 'px';
+    syncEditorScroll();
+  }
+
+  function updateEditor() {
+    if (editorFrame) cancelAnimationFrame(editorFrame);
+    editorFrame = requestAnimationFrame(() => {
+      editorFrame = 0;
+      const lines = controls.body.value.split('\n');
+      $('highlight').innerHTML = lines.map((line) => `<span class="wsm-code-line">${line ? highlightLine(line) : '\u200b'}</span>`).join('');
+      $('gutter').innerHTML = lines.map((_, i) => `<div class="wsm-gutter-line">${i + 1}</div>`).join('');
+      syncEditorLayout();
+      panel.dataset.highlighted = 'true';
+    });
+  }
+
+  function autoSize(control) {
+    control.style.height = 'auto';
+    control.style.height = (control.scrollHeight || (control === controls.title ? 41 : 28)) + 'px';
+  }
+
+  function syncLayout() {
+    const measured = panel.getBoundingClientRect().width;
+    const previewWidth = panel.dataset.mode === 'narrow' ? 420 : panel.dataset.mode === 'wide' ? 860 : 1440;
+    const width = measured || Math.min(previewWidth, window.innerWidth);
+    panel.dataset.layout = width < 780 ? 'single' : 'split';
+    panel.dataset.view = state.narrowDetail ? 'detail' : 'list';
+    autoSize(controls.title); autoSize(controls.description);
+    syncEditorLayout();
+  }
+
+  function scheduleLayout() {
+    if (layoutFrame) cancelAnimationFrame(layoutFrame);
+    layoutFrame = requestAnimationFrame(() => { layoutFrame = 0; syncLayout(); });
+  }
+
+  function renderList() {
+    $('confirmed-count').textContent = collections.confirmed.length;
+    $('pending-count').textContent = collections.pending.length;
+    document.querySelectorAll('[data-tab]').forEach((tab) => {
+      const active = tab.dataset.tab === state.tab;
+      tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
+    });
+    $('memory-list-region').setAttribute('aria-labelledby', 'tab-' + state.tab);
+    $('list').setAttribute('aria-label', state.tab === 'pending' ? '待确认记忆' : '已确认记忆');
+    const items = visibleMemories();
+    $('list-count').textContent = `${items.length} 条记忆`;
+    if (!items.length) {
+      $('list').innerHTML = `<div class="wsm-empty" role="status">${state.query ? '没有匹配的记忆' : state.tab === 'pending' ? '暂无待确认记忆' : '还没有记忆'}</div>`;
+      return;
+    }
+    $('list').innerHTML = items.map((memory, index) => {
+      const selected = memory.id === state.selectedId;
+      const title = selected && state.draft ? state.draft.title : memory.title;
+      const description = selected && state.draft ? state.draft.description : memory.description;
+      const type = selected && state.draft ? state.draft.type : memory.type;
+      const scope = selected && state.draft ? state.draft.scope : memory.scope;
+      return `<button class="wsm-item" type="button" role="option" aria-selected="${selected}" tabindex="${selected || (!state.selectedId && index === 0) ? 0 : -1}" data-id="${escapeHTML(memory.id)}">
+        <div class="wsm-item-title">${escapeHTML(title)}</div>
+        <div class="wsm-item-desc">${escapeHTML(description)}</div>
+        <div class="wsm-badges"><span class="wsm-badge t-${escapeHTML(type)}">${escapeHTML(TYPE_LABEL[type] || type)}</span>
+        <span class="wsm-item-dirty"${selected && isDirty() ? '' : ' hidden'}>未保存</span>
+        ${scope === 'global' ? '<span class="wsm-badge t-global">跨项目</span>' : ''}</div></button>`;
+    }).join('');
+  }
+
+  function renderTags() {
+    $('tags').innerHTML = state.draft.tags.map((tag, index) => `<span class="wsm-tag"><span title="${escapeHTML(tag)}">${escapeHTML(tag)}</span><button type="button" data-remove-tag="${index}" aria-label="移除标签 ${escapeHTML(tag)}"${state.saving ? ' disabled' : ''}>×</button></span>`).join('');
+  }
+
+  function setFileOpen(open, focus = true) {
+    $('file-popover').hidden = !open;
+    $('file-trigger').setAttribute('aria-expanded', String(open));
+    if (open && focus) controls.slug.focus();
+  }
+
+  function setBodyView(view) {
+    state.bodyView = view;
+    const preview = view === 'preview';
+    if (preview) {
+      $('markdown-preview').innerHTML = renderMarkdown(state.draft ? state.draft.body : '');
+      $('preview-surface').scrollTop = state.previewScroll;
+    } else state.previewScroll = $('preview-surface').scrollTop;
+    $('editor-surface').hidden = preview;
+    $('preview-surface').hidden = !preview;
+    document.querySelectorAll('[data-body-view]').forEach((tab) => {
+      const selected = tab.dataset.bodyView === view;
+      tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
+    });
+    scheduleLayout();
+  }
+
+  function updateStatus() {
+    const dirty = isDirty();
+    const status = $('save-status');
+    let kind = 'saved'; let text = '已保存';
+    if (state.saving) { kind = 'saving'; text = '保存中…'; }
+    else if (state.saveError) { kind = 'error'; text = '保存失败'; }
+    else if (dirty) { kind = 'dirty'; text = '未保存'; }
+    else if (state.flash) { kind = 'success'; text = state.flash; }
+    status.dataset.state = kind; status.textContent = text;
+    $('save').disabled = state.saving || (!dirty && state.tab !== 'pending');
+    $('cancel').disabled = state.saving || !dirty;
+    $('save').textContent = state.saving ? '保存中…' : state.tab === 'pending' ? '收下记忆' : '保存更改';
+    $('reject').hidden = state.tab !== 'pending';
+    $('reject').disabled = state.saving;
+    $('save-error').textContent = state.saveError;
+    $('save-error').hidden = !state.saveError;
+    if (state.draft) {
+      $('file-name').textContent = state.draft.slug + '.md';
+      $('file-trigger').title = `本项目 / ${state.draft.slug}.md · 文件信息与重命名`;
+      $('promote').disabled = state.draft.scope !== 'global' || state.saving;
+      $('promote').hidden = state.tab === 'pending';
+      $('promote').title = state.draft.scope === 'global'
+        ? '沿用原有搬移操作：写入全局 AGENTS.md，并从项目库移出'
+        : '仅跨项目记忆可写入全局 AGENTS.md';
+    }
+  }
+
+  function renderDetail() {
+    const memory = currentMemory();
+    $('document').hidden = !memory;
+    $('detail-empty').hidden = !!memory;
+    $('detail-empty').textContent = state.tab === 'pending' ? '暂无待确认记忆' : state.query ? '没有匹配的记忆' : '选择一条记忆';
+    setFileOpen(false, false);
+    if (!memory) return;
+    for (const [field, control] of Object.entries(controls)) control.value = state.draft[field];
+    const confidence = Number(memory.confidence);
+    $('confidence').textContent = `模型自评 ${Number.isFinite(confidence) ? confidence.toFixed(2) : '—'} · 只读`;
+    const modified = formatTime(memory.modified);
+    $('modified').textContent = '更新于 ' + modified;
+    $('modified').dateTime = memory.modified || '';
+    $('file-modified').textContent = modified;
+    $('tag-input').value = ''; $('tag-input').hidden = true; $('add-tag').hidden = false;
+    renderTags(); showErrors(state.errors); setBodyView(state.bodyView); updateStatus();
+    controls.body.scrollTop = 0;
+    updateEditor(); scheduleLayout();
+  }
+
+  function loadMemory(memory) {
+    state.selectedId = memory ? memory.id : null;
+    state.baseline = memory ? toDraft(memory) : null;
+    state.draft = state.baseline ? clone(state.baseline) : null;
+    state.errors = {}; state.saveError = ''; state.flash = ''; state.previewScroll = 0;
+    clearTimeout(flashTimer);
+    renderList(); renderDetail();
+  }
+
+  function onDraftChanged(field) {
+    state.flash = ''; state.saveError = ''; clearTimeout(flashTimer);
+    if (state.errors[field]) {
+      const errors = { ...state.errors }; const currentErrors = validateDraft(state.draft);
+      if (currentErrors[field]) errors[field] = currentErrors[field]; else delete errors[field];
+      showErrors(errors);
+    }
+    updateStatus();
+    // Only the list rerenders; the focused document controls remain mounted.
+    renderList();
+  }
+
+  function openTagInput() {
+    $('tag-input').hidden = false; $('add-tag').hidden = true; $('tag-input').focus();
+  }
+
+  function addTag(closeAfter = false) {
+    const input = $('tag-input'); const value = input.value.trim();
+    if (!value) {
+      if (closeAfter) { input.hidden = true; $('add-tag').hidden = false; }
+      updateStatus(); return true;
+    }
+    let error = '';
+    if (value.length > 40 || /[,\]]/.test(value)) error = '标签需为 1–40 个字符，不能包含英文逗号或 ]。';
+    else if (state.draft.tags.length >= 20) error = '最多添加 20 个标签。';
+    else if (state.draft.tags.some((tag) => tag.toLocaleLowerCase() === value.toLocaleLowerCase())) error = '这个标签已存在。';
+    if (error) { showErrors({ ...state.errors, tags: error }); input.focus(); updateStatus(); return false; }
+    state.draft.tags.push(value); input.value = '';
+    const errors = { ...state.errors }; delete errors.tags; showErrors(errors);
+    renderTags();
+    if (closeAfter) { input.hidden = true; $('add-tag').hidden = false; }
+    onDraftChanged('tags'); return true;
+  }
+
+  function flushTag() { return $('tag-input').hidden || addTag(true); }
+
+  function closeGuard() {
+    $('unsaved-dialog').close(); state.pendingAction = null;
+    if (guardFocus && guardFocus.isConnected) guardFocus.focus();
+  }
+
+  function requestTransition(action, context = '切换') {
+    if (state.saving || state.pendingAction) return;
+    if (!isDirty()) { action(); return; }
+    guardFocus = document.activeElement;
+    state.pendingAction = action;
+    $('unsaved-title').textContent = context === '取消' ? '如何处理当前修改？' : '保存当前修改？';
+    $('unsaved-description').textContent = context === '取消' ? '放弃修改后，将恢复上次保存的内容。' : '继续操作前，请处理这条记忆的未保存修改。';
+    setFileOpen(false, false);
+    $('unsaved-dialog').showModal(); $('guard-continue').focus();
+  }
+
+  function setBusy(busy) {
+    state.saving = busy;
+    for (const control of Object.values(controls)) control.disabled = busy;
+    $('tag-input').disabled = busy; $('add-tag').disabled = busy; $('search').disabled = busy;
+    panel.querySelectorAll('[data-tab], [data-remove-tag], [data-action="refresh"]').forEach((control) => { control.disabled = busy; });
+    $('document').setAttribute('aria-busy', String(busy));
+    updateStatus();
+  }
+
+  async function saveDraft(acceptPending = false) {
+    if (!state.draft || state.saving || !flushTag()) return false;
+    const errors = validateDraft(state.draft);
+    showErrors(errors);
+    if (Object.keys(errors).length) { focusFirstError(); return false; }
+    const snapshot = clone(state.draft);
+    const memory = currentMemory();
+    const tabAtSave = state.tab;
+    state.saveError = ''; state.flash = ''; setBusy(true);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 360));
+      if ($('preview-save-state').value === 'failure') throw new Error('保存失败，修改仍保留。请重试。');
+      if (!memory) throw new Error('未找到当前记忆，修改仍保留。');
+      // Only the existing editable data fields are updated. Confidence/hits stay untouched.
+      Object.assign(memory, {
+        id: snapshot.slug, title: snapshot.title, description: snapshot.description,
+        type: snapshot.type, scope: snapshot.scope, tags: [...snapshot.tags], body: snapshot.body,
+        modified: new Date().toISOString(),
+      });
+      if (Object.hasOwn(memory, 'slug')) memory.slug = snapshot.slug;
+      if (tabAtSave === 'pending' && acceptPending) {
+        collections.pending.splice(collections.pending.indexOf(memory), 1);
+        collections.confirmed.push(memory);
+        state.tab = 'confirmed';
+      }
+      state.selectedId = memory.id;
+      state.baseline = toDraft(memory); state.draft = clone(state.baseline);
+      state.flash = tabAtSave === 'pending' && acceptPending ? '已收下' : '已保存';
+      const modified = formatTime(memory.modified);
+      $('modified').textContent = '更新于 ' + modified; $('modified').dateTime = memory.modified;
+      $('file-modified').textContent = modified;
+      renderList();
+      flashTimer = setTimeout(() => { state.flash = ''; updateStatus(); }, 2400);
+      return true;
+    } catch (error) {
+      state.saveError = error.message || '保存失败，修改仍保留。';
+      return false;
+    } finally { setBusy(false); }
+  }
+
+  function selectMemory(id, focusList = false) {
+    const action = () => {
+      if (id !== state.selectedId) loadMemory(collections[state.tab].find((memory) => memory.id === id));
+      state.narrowDetail = true; panel.dataset.view = 'detail';
+      if (focusList) [...$('list').querySelectorAll('[data-id]')].find((item) => item.dataset.id === state.selectedId)?.focus();
+    };
+    if (id === state.selectedId) action(); else requestTransition(action);
+  }
+
+  function applySearch(query) {
+    state.query = query; $('search').value = query;
+    const items = visibleMemories();
+    if (!items.some((memory) => memory.id === state.selectedId)) loadMemory(items[0]);
+    else renderList();
+  }
+
+  function changeTab(tab) {
+    if (tab === state.tab) return;
+    requestTransition(() => {
+      state.tab = tab; state.query = ''; $('search').value = '';
+      state.narrowDetail = false; state.fullscreen = false;
+      panel.dataset.fullscreen = 'false'; panel.dataset.view = 'list';
+      $('fullscreen').textContent = '全屏'; $('fullscreen').setAttribute('aria-pressed', 'false');
+      loadMemory(visibleMemories()[0]);
+      $('tab-' + tab).focus();
+    });
+  }
+
+  function showNotice(title, description) {
+    $('notice-title').textContent = title; $('notice-description').textContent = description;
+    $('notice-dialog').showModal();
+  }
+
+  function toast(message) {
+    clearTimeout(toastTimer); $('toast').textContent = message; $('toast').hidden = false;
+    toastTimer = setTimeout(() => { $('toast').hidden = true; }, 1600);
+  }
+
+  function toggleFullscreen() {
+    state.fullscreen = !state.fullscreen;
+    panel.dataset.fullscreen = String(state.fullscreen);
+    $('fullscreen').setAttribute('aria-pressed', String(state.fullscreen));
+    $('fullscreen').textContent = state.fullscreen ? '退出全屏' : '全屏'; scheduleLayout();
+  }
+
+  function rejectPending() {
+    if (state.tab !== 'pending') return;
+    requestTransition(() => {
+      const memory = currentMemory();
+      if (!window.confirm('丢弃这条待确认记忆？')) return;
+      collections.pending.splice(collections.pending.indexOf(memory), 1);
+      loadMemory(visibleMemories()[0]); toast('已丢弃');
+    });
+  }
+
+  // All document controls are mounted once. Rendered list/tag rows use delegation.
+  panel.addEventListener('click', (event) => {
+    const target = event.target.closest('button');
+    if (!target || target.disabled) return;
+    if (target.dataset.id) { if (!state.saving) selectMemory(target.dataset.id); return; }
+    if (target.dataset.tab) { changeTab(target.dataset.tab); return; }
+    if (target.dataset.bodyView) { if (flushTag()) setBodyView(target.dataset.bodyView); return; }
+    if (target.dataset.removeTag != null && state.draft && !state.saving) {
+      state.draft.tags.splice(Number(target.dataset.removeTag), 1); renderTags();
+      const errors = { ...state.errors }; delete errors.tags; showErrors(errors); onDraftChanged('tags'); return;
+    }
+    switch (target.dataset.action) {
+      case 'save': void saveDraft(state.tab === 'pending'); break;
+      case 'cancel': requestTransition(() => loadMemory(currentMemory()), '取消'); break;
+      case 'reject': rejectPending(); break;
+      case 'add-tag': openTagInput(); break;
+      case 'back': state.narrowDetail = false; panel.dataset.view = 'list'; break;
+      case 'file': setFileOpen($('file-popover').hidden); break;
+      case 'close-file': setFileOpen(false); $('file-trigger').focus(); break;
+      case 'fullscreen': toggleFullscreen(); break;
+      case 'refresh': requestTransition(() => { loadMemory(currentMemory()); toast('列表已刷新'); }); break;
+      case 'open-agents': {
+        const editor = $('agents-editor').selectedOptions[0].textContent;
+        showNotice('此预览未连接本机编辑器', `已选择「${editor}」。请在正式插件中打开 AGENTS.md。`); break;
+      }
+      case 'promote':
+        showNotice('此操作需要正式插件', '搬移会追加全局 AGENTS.md 并移出项目库。静态预览不会修改这些文件。'); break;
+    }
+  });
+
+  for (const [field, control] of Object.entries(controls)) {
+    control.addEventListener('input', () => {
+      if (!state.draft || state.saving) return;
+      state.draft[field] = control.value;
+      if (field === 'title' || field === 'description') autoSize(control);
+      if (field === 'body') updateEditor();
+      onDraftChanged(field);
+    });
+    control.addEventListener('blur', () => {
+      if (!state.draft || state.saving) return;
+      const errors = { ...state.errors }; const fieldError = validateDraft(state.draft)[field];
+      if (fieldError) errors[field] = fieldError; else delete errors[field];
+      showErrors(errors);
+    });
+  }
+
+  $('tag-input').addEventListener('input', updateStatus);
+  $('tag-input').addEventListener('keydown', (event) => {
+    if (event.isComposing) return;
+    if (event.key === 'Enter') { event.preventDefault(); addTag(); }
+    else if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); $('tag-input').value = '';
+      $('tag-input').hidden = true; $('add-tag').hidden = false;
+      const errors = { ...state.errors }; delete errors.tags; showErrors(errors); updateStatus(); $('add-tag').focus();
+    }
+  });
+  $('tag-input').addEventListener('blur', () => { if (!state.saving && !$('tag-input').hidden && !$('unsaved-dialog').open) addTag(true); });
+  controls.body.addEventListener('scroll', syncEditorScroll, { passive: true });
+
+  $('search').addEventListener('input', () => {
+    const nextQuery = $('search').value;
+    const nextItems = visibleMemories(nextQuery);
+    if (isDirty() && !nextItems.some((memory) => memory.id === state.selectedId)) {
+      $('search').value = state.query; requestTransition(() => applySearch(nextQuery));
+    } else applySearch(nextQuery);
+  });
+  $('search').addEventListener('keydown', (event) => { if (event.key === 'Escape' && state.query) { event.preventDefault(); $('search').value = ''; $('search').dispatchEvent(new Event('input', { bubbles: true })); } });
+
+  $('list').addEventListener('keydown', (event) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const items = visibleMemories(); if (!items.length) return;
+    event.preventDefault();
+    let index = Math.max(0, items.findIndex((memory) => memory.id === state.selectedId));
+    if (event.key === 'Home') index = 0;
+    else if (event.key === 'End') index = items.length - 1;
+    else index = Math.min(items.length - 1, Math.max(0, index + (event.key === 'ArrowDown' ? 1 : -1)));
+    selectMemory(items[index].id, true);
+  });
+
+  document.querySelectorAll('[role="tablist"]').forEach((tablist) => tablist.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+    const index = tabs.indexOf(document.activeElement); if (index < 0) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].click(); if (!state.pendingAction) tabs[next].focus();
+  }));
+
+  $('unsaved-dialog').addEventListener('click', async (event) => {
+    const choice = event.target.closest('[data-guard]')?.dataset.guard;
+    if (!choice) return;
+    const action = state.pendingAction;
+    closeGuard();
+    if (choice === 'continue' || !action) return;
+    if (choice === 'save') { if (await saveDraft()) action(); }
+    else { state.draft = clone(state.baseline); $('tag-input').value = ''; action(); }
+  });
+  $('unsaved-dialog').addEventListener('cancel', (event) => { event.preventDefault(); closeGuard(); });
+  $('notice-close').addEventListener('click', () => $('notice-dialog').close());
+
+  document.querySelectorAll('.stage-modes [data-mode]').forEach((button) => button.addEventListener('click', () => {
+    panel.dataset.mode = button.dataset.mode;
+    document.querySelectorAll('.stage-modes [data-mode]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+    scheduleLayout();
+  }));
+
+  document.addEventListener('click', (event) => {
+    if (!$('file-popover').hidden && !event.target.closest('#file-popover, #file-trigger, [data-action="save"], [data-guard="save"]')) setFileOpen(false, false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.isComposing) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      if (!$('unsaved-dialog').open && !$('notice-dialog').open) void saveDraft(state.tab === 'pending');
+    } else if (event.key === 'Escape') {
+      if (!$('file-popover').hidden) { setFileOpen(false); $('file-trigger').focus(); }
+      else if (state.fullscreen && !$('unsaved-dialog').open && !$('notice-dialog').open) toggleFullscreen();
+    }
+  });
+  window.addEventListener('beforeunload', (event) => {
+    if (isDirty() || state.saving) { event.preventDefault(); event.returnValue = ''; }
+  });
+  window.addEventListener('resize', scheduleLayout, { passive: true });
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(scheduleLayout);
+    observer.observe(panel); observer.observe(controls.body);
+  }
+
+  // Match the approved screen while keeping the original JSON and memory order.
+  const initial = collections.confirmed.find((memory) => memory.id === 'npm-publish-every-4-hours-not-per-change') || collections.confirmed[0];
+  loadMemory(initial); syncLayout();
+})();
+
+</script>
+</body>
+</html>
