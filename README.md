@@ -54,10 +54,12 @@
 
 - slug 是**独立标识**，不从中文标题派生。改标题**不会**重命名文件
 - 只有显式改 slug 才重命名，并删除旧文件（不留两份）
-- 撞名自动加 `-2`，不覆盖别人的记忆
-- 新建时若没给 slug，退回标题派生——中文标题会得到中文文件名，属于降级路径
+- 撞名自动加 `-2`（**不分大小写**比较——Windows 上 `Docs.md` 与 `docs.md` 是同一个文件），不覆盖别人的记忆
+- `memory_remember` 写项目记忆时，标题含非 ASCII 字符却没给可用的英文 slug → **拒写**并返回 `needs-slug`，
+  要求模型补一个英文 slug 再调。实测此前真实库里 3 条有 2 条因为模型漏给 slug 落成了中文文件名
+- 抽取草稿、手写文件等其它路径没给 slug 时仍退回标题派生（降级路径）
 
-`memory_remember` 有 `slug` 参数、抽取提示词也会要求模型给英文 slug、面板里可直接编辑。
+`memory_remember` 有 `slug` 参数、抽取提示词也会要求模型给英文 slug、面板里可直接编辑（面板拒绝非 ASCII slug）。
 
 > 一处与 CC 的有意偏离：**「项目」取自 DSH 的 `workspaceRegistry`，不是 git repo root。**
 > 这个工作区里 `dsh-profile-stats`、`dsh-command-context` 各自是独立 git 仓库，
@@ -94,6 +96,14 @@ title: 界面里不要自行添加解释性说明文字        # 中文标题，
 ```
 
 `description` 是索引与正文的公共投影：**显式给了就用给的；正文变了且没给就按新正文重新取一行；正文没变则保持原摘要**，避免只改标签也把摘要冲掉。上限 120 字符（它就是索引那一行）。
+自动取行时**跳过标题、代码围栏与分隔线**——正文以 `## 规则` 开头时，以前索引里那一行就只剩「规则」两个字。
+
+frontmatter 是 YAML 的一个子集，读写互为逆运算：
+
+- 值会产生歧义时（换行、首尾空白、`: `、` #`、以 `[ " ' { # …` 开头、空串）序列化器写成 **JSON 双引号串**（也是合法 YAML），普通值仍是裸文本，所以旧文件解析结果不变
+- 数组项含 `,` `[` `]` `"` 时同样加引号；`[WIP] Foo [x]` 这种标量不会被误读成数组
+- `title` / `description` 是单行字段，落盘前换行一律折成空格；开头的 UTF-8 BOM（记事本另存）会被忽略
+- 更新时保留 `hits` / `lastHit` 与所有未知键（手写的、别的工具加的）
 
 `type` 有四种，对齐 Claude Code：`user`（角色偏好）、`feedback`（纠正与确认过的方法）、`project`（进行中的工作与非显然决策）、`reference`（仓库外信息的存放位置）。
 
@@ -105,7 +115,11 @@ title: 界面里不要自行添加解释性说明文字        # 中文标题，
 
 ## 注入
 
-每轮通过 `ctx.systemPrompt.context()` 注入 `MEMORY.md`，上限 **200 行 / 25KB**（先到者为准，照抄 Claude Code 的口径）。超限时**不静默截断**——把警告写进索引本身，因为注入时模型一定看得到。
+每轮通过 `ctx.systemPrompt.context()` 注入 `MEMORY.md`，上限 **200 行 / 25KB**（先到者为准，照抄 Claude Code 的口径）。超限时**不静默截断**：注入文本末尾追加一行 `[WARNING] N of M memory entries are NOT listed above…`，并为这行预留预算，保证它一定进得去。
+
+> 以前警告是追加在 `MEMORY.md` **文件末尾**的，而注入是从头截断——超限时被截掉的恰好就是警告本身。
+
+库里一条都没有时不注入（只剩 `# Memory Index` 标题没有意义）。
 
 `interpolate: false` 是必需的：记忆正文可能含 `{{ }}` 或 `[]`，让它们被当成插值语法解析会把注入搞崩。
 
@@ -115,18 +129,13 @@ title: 界面里不要自行添加解释性说明文字        # 中文标题，
 
 本地 embedding 用 `leanvec`（静态嵌入表，dim 256，中文/英文/俄文/代码剪枝，零依赖、不联网、按 token 懒读行）。
 
-融合权重：向量 0.65 / 关键词 0.35。关键词通道对中文做二元组切分，对拉丁文按词。
+融合权重：向量 0.65 / 关键词 0.35。关键词通道对中日韩文字（含假名、谚文）做二元组切分；
+拉丁文按词，且**只在词首命中**（`ci` 不再命中 "spe**ci**fied"，`recall` 仍能命中 `memory_recall`）。
 
-### 门槛经过实测标定，不是拍脑袋
+真正的闸门是**融合分 `minScore`（默认 0.34）**，由金标集扫描标定，见下文「召回质量怎么衡量」。
+`minVectorScore` / `minKeywordScore` 只是前置筛：leanvec 是静态嵌入，任意文本余弦都容易过 0.3，单靠它们等于没有闸门。
 
-2026-11-01 用 4 条种子记忆实测（leanvec dim 256）：
-
-| 查询类型 | 最佳向量相似度 |
-| - | - |
-| 完全无关（"今天天气怎么样" / "红烧肉要炖多久" / "int16 record sha1"） | 0.09 – 0.17 |
-| 命中（同义改写 / 关键词重合） | 0.44 以上 |
-
-因此取 `MIN_VECTOR = 0.30`、`MIN_KEYWORD = 0.5`：任一通道过门槛才入选，否则该条直接丢弃。测试中断言**无关查询必须返回零结果**。
+向量与文件内容按哈希对账：手改过文件、或新文件还没有向量时，`recall` 会就地增量重嵌，不会继续用旧向量。
 
 ## 已知限制
 
@@ -154,9 +163,14 @@ title: 界面里不要自行添加解释性说明文字        # 中文标题，
 /memory pending     列出待确认草稿
 /memory accept <id> 收下草稿，搬进正式库并重建索引与向量
 /memory reject <id> 丢弃草稿
+/memory forget <id> 删除一条记忆（别名 delete，支持唯一前缀；删除前留历史版本）
 /memory extract     立刻跑一次抽取（不管 enableExtraction 与节流）
 /memory_list        在右侧栏打开记忆面板
+/memory_extract     同 /memory extract（独立命令，便于在补全菜单里点选）
+/memory_pending     同 /memory pending
 ```
+
+DSH 只补全命令名、没有参数级补全，所以无参子命令各注册成一个独立命令；带 id 的 `accept / reject / forget` 仍走 `/memory <sub> <id>`。
 
 ### 命令卡为什么能默认展开
 
@@ -187,9 +201,15 @@ title: 界面里不要自行添加解释性说明文字        # 中文标题，
 - 详情：标题 / 类型（本地化标签 + 英文枚举）/ 标签 chips（可增删）/ 摘要 / 英文文件名 / 正文
 - 正文编辑器带**行号 gutter** 与全屏模式，`textarea` 与 gutter 同步滚动
 - 底部：来源文件名、更新时间、未保存提示、取消 / 保存
-- 待确认项：底部换成 **收下 / 丢弃** 两个按钮（与 `/memory accept|reject` 同一套宿主函数）
+- 待确认项：**只读**，底部换成 **收下 / 丢弃** 两个按钮（与 `/memory accept|reject` 同一套宿主函数）。
+  宿主没有「改草稿」的接口，以前允许编辑，改完点收下修改会被静默丢掉
+- 标题与摘要是单行字段：回车被拦下（输入法组字中的回车除外），粘贴进来的换行折成空格
 
-「取消」在有未保存改动时会先确认，不会静默丢弃。
+「取消」在有未保存改动时会先确认，不会静默丢弃。切换记忆、切换页签、在 AGENTS.md 页签换章或切回记忆库，都走同一个守卫。
+
+`Ctrl/⌘ S` 只在「面板可见、焦点在面板内、当前页签有未保存修改」时接管，否则不拦截宿主别处的快捷键。
+
+保存以宿主回读的记忆为准（改 slug 会换 id，不再按标题去列表里反查）；保存期间切走了，迟到的响应不会写进另一条记忆的编辑器。换会话时面板整体重挂。
 
 ### `/memory_list` 的自动打开语义
 
@@ -210,18 +230,50 @@ title: 界面里不要自行添加解释性说明文字        # 中文标题，
 ```
 GET  /api/dsh-workspace-memory/list?session=<id>
 POST /api/dsh-workspace-memory/save?session=<id>
-POST /api/dsh-workspace-memory/accept?session=<id>      # 收下草稿
-POST /api/dsh-workspace-memory/reject?session=<id>      # 丢弃草稿
-GET  /api/dsh-workspace-memory/agents                  # AGENTS.md 概况 + 探测到的编辑器
-POST /api/dsh-workspace-memory/promote?session=<id>    # 把一条记忆搬进 AGENTS.md
-POST /api/dsh-workspace-memory/open-agents             # 用指定编辑器打开 AGENTS.md
-POST /api/dsh-workspace-memory/diag                     # 默认关闭（enableDiagEndpoint）
+POST /api/dsh-workspace-memory/accept?session=<id>          # 收下草稿
+POST /api/dsh-workspace-memory/reject?session=<id>          # 丢弃草稿
+POST /api/dsh-workspace-memory/forget?session=<id>          # 删除记忆
+POST /api/dsh-workspace-memory/promote?session=<id>         # 把一条记忆搬进 AGENTS.md
+GET  /api/dsh-workspace-memory/agents                       # AGENTS.md 概况 + 探测到的编辑器
+POST /api/dsh-workspace-memory/open-agents                  # 用指定编辑器打开 AGENTS.md
+GET  /api/dsh-workspace-memory/agents/sections              # AGENTS.md 按章切分
+POST /api/dsh-workspace-memory/agents/save-section          # { index, expectedTitle, title, body }
+POST /api/dsh-workspace-memory/agents/delete-section        # { index, expectedTitle }
+POST /api/dsh-workspace-memory/agents/add-section           # { title, body }
 ```
+
+**所有 POST 必须带 `Content-Type: application/json`**，否则 415。浏览器跨站发出的「简单请求」只能是
+`text/plain` / 表单类型，带 JSON 类型就必须先过 CORS 预检——只要宿主不对跨站预检放行，
+网页就没法借本机端口改写每轮都会注入的 AGENTS.md。（宿主的 CORS 策略未核实；AGENTS.md 相关路由不要求 session。）
+
+失败统一返回 `{ ok: false, reason, errors }`：
+
+| 状态 | reason |
+|---|---|
+| 400 | `no-session`、`invalid-id`、`invalid-index`、`invalid-json` |
+| 404 | 记忆 / 草稿不存在 |
+| 409 | `section-moved`（章节已被外部改动挪了位置）、`library-full` |
+| 413 | `body-too-large`（上限 1 MiB） |
+| 415 | `unsupported-media-type` |
+| 500 | 未预期的异常 |
+
+AGENTS.md 的章节是按**位置**寻址的。面板写入时带上用户看到的标题 `expectedTitle`，
+文件在外部编辑器里被改过、位置对不上时返回 `section-moved`，面板重新读取，不会改到或删到别的章。
 
 **`session` 参数是必需的，不是可选优化。** 2026-11-01 实测踩到：HTTP 请求没有 agent，
 若退回 `workingDirectory.defaultDirectory` 会解析到进程默认目录（profile 目录），
 面板读到 0 条记忆却返回 200——错得很安静。所以现在宿主用 `sessionId` 反查会话工作目录，
 查不到就明确返回 400，绝不猜一个目录去读或写。
+
+## 安全边界
+
+记忆 id 就是文件名，而 id 会从工具参数、HTTP 请求体里原样进来。以前 `memory_forget {id: "../../../AGENTS"}`
+会删掉 `~/.dsh/AGENTS.md`——模型一旦被网页或文件内容提示注入，就能触发。现在：
+
+- `isSafeId`：拒绝路径分隔符、Windows 非法字符（仅 ASCII，全角 `：（）` 可以）、控制字符、首尾空白、结尾的 `.`、`.` / `..`、超过 200 字符
+- 每处「id → 路径」再做一次包含性检查：解析结果必须平铺在目标目录里，否则不碰任何文件
+- 记忆文件、草稿、`MEMORY.md`、AGENTS.md 一律「写临时文件再 rename」，崩溃不会留下半个文件
+  （rename 失败——例如编辑器占着文件——时退回直接写）
 
 ## 格式闸门
 
@@ -229,12 +281,16 @@ POST /api/dsh-workspace-memory/diag                     # 默认关闭（enableD
 
 | 字段 | 规则 |
 | - | - |
-| `title` | 非空，≤ 200 字符 |
+| `title` | 非空，≤ 200 字符，**不能含换行** |
 | `body` | 非空，≤ 20000 字符 |
 | `type` | 只能是 `user` / `feedback` / `project` / `reference` |
-| `tags` | 字符串数组，≤ 20 个，单个 ≤ 40 字符，**不能含英文逗号或 `]`**（会破坏 frontmatter 内联数组） |
-| `slug` | 归一化为小写英文 + 数字 + 连字符 |
-| `description` | ≤ 120 字符（它就是索引那一行） |
+| `tags` | 字符串数组，≤ 20 个，单个 ≤ 40 字符，不能含换行、英文逗号或 `]` |
+| `slug` | 归一化为小写英文 + 数字 + 连字符；含非 ASCII 字符或归一化后不足 2 字符**直接报错**（以前会静默换成 `memory-<时间戳>`） |
+| `description` | ≤ 120 字符（它就是索引那一行），**不能含换行** |
+| `paths` | 字符串数组，不能含换行 |
+
+换行之所以要拦：frontmatter 一行一个键，`description: x⏎confidence: 0.1` 以前能直接改写「只读」的 confidence，
+`x⏎---` 会把后面的元数据挤进正文。
 | `confidence` | **只读**。它是模型自评，不是用户判断；经编辑接口传会被明确拒绝 |
 
 未知字段直接忽略；任何一条不合法就**整体拒绝**，并逐字段给出原因，前端原样展示。
@@ -276,10 +332,13 @@ POST /api/dsh-workspace-memory/diag                     # 默认关闭（enableD
 
 这是插件里**唯一**会写用户手写文件的动作，所以有四道保护：
 
-- 标题已存在 → 返回 `already-present`，**绝不重复追加**
-- 只追加，不改写任何已有内容
+- 标题已存在 → 返回 `already-present`，**绝不重复追加**（按去掉编号后的标题比较）
+- 只追加，不改写任何已有内容；受 `maxAgentsBytes` 约束，写前留档——和面板「新增章」走同一个 `appendAgentsSection`
 - 删除走带留档的那条路径
 - 只有 `scope: global` 的记忆才允许搬，避免把项目内知识污染成全局规则
+
+> 以前 promote 自己拼字符串写文件：同名检查用的是不带编号的标题（实际标题都带 `N.`，永远匹配不上），
+> 也不查字节上限、不留档。现在三道保护都由同一个函数承担。
 
 > AGENTS.md 是**每轮都注入**的。搬太多进去会持续占用上下文，
 > 建议只放真正跨项目、且长期稳定的规则。
@@ -333,9 +392,13 @@ POST /api/dsh-workspace-memory/diag                     # 默认关闭（enableD
 **章节切分规则**：`##` 成章，其下的 `###` 属于该章正文；`#` 一级标题算文档前言、不参与编辑。
 所以删一章会连同它的子节一起删，不会留下孤儿标题。
 
+**代码块**：围栏代码（```` ``` ```` / `~~~`）里的 `#` / `## ` 是代码，不参与切章、编号与标题下沉。
+
 **编号**：写入后统一重排为 `## N.` + `### N.M`，删章不留断号；标题里即便带旧编号也会被剥掉重排。
+只有 `N.` / `N.M` 这种形态算编号：`### 5 Whys`、`### 2024 roadmap` 原样保留。没改动的章逐字节保留，原文件的换行风格（CRLF/LF）也保留。
 
 **安全**：每次写盘前把原文件复制到 `~/.dsh/.dsh-workspace-memory-history/agents/`（保留最近 20 份）。
+超出 `maxAgentsBytes` 时拒写，但**让文件变小的编辑始终允许**——否则超限之后连删一章都删不掉。
 
 **做不到的**：DSH 的指令加载器（`@deepseek-ai/dsh-agent-instructions`）不对外暴露服务，
 所以**无法权威判断**某个文件是否被字节预算截断——面板只能显示文件大小。
@@ -410,6 +473,9 @@ AGENTS.md **每轮请求都会注入**，它不是存储而是常驻成本。所
 | 库里没有相近条目 | 直接写入 |
 | 有候选 ≥ `duplicateThreshold`（默认 0.62） | **拒写**，返回候选清单与分数 |
 | 传 `supersedes: "<id>"` | 覆盖那条：旧正文归档到 `history/`，新条目记 `supersedes: <旧 id>` |
+| `supersedes` 且新 slug 与旧 id 相同 | **原地更新**：旧版进 `history/`，保留 `created` / `hits`，不再生成 `-2` 副本 |
+| `supersedes` 是多条记忆的共同前缀 | **拒写**并列出候选（以前静默取最近一条删掉） |
+| 低置信度 + `supersedes` | 草稿里记下 `supersedes`，收下时才执行取代 |
 | 传 `newMemory: true` | 确认是独立的一条，照常写入 |
 
 不做自动合并的理由和 AGENTS.md 那套一样：语义重复判断不准。
@@ -435,8 +501,14 @@ AGENTS.md **每轮请求都会注入**，它不是存储而是常驻成本。所
 | 同一轮同一条**只提示一次** | 读 10 个文件不该重复喊同一句话 |
 | 异常/不命中一律放行原结果 | 提示是锦上添花，不能拖垮工具调用 |
 
-匹配规则：相对工作区根书写，`*` 通配但**不跨目录**，判据是「真实路径以该模式结尾」，
-所以绝对路径也能命中。目录形式（`foo/`）匹配其下所有文件。
+匹配规则（按路径**段**比较，不做子串匹配）：
+
+- 相对工作区根书写，判据是「真实路径的末尾若干段与模式逐段相符」，所以绝对路径也能命中
+- `*` 只在一段之内通配；`**` 匹配零到多段
+- 目录形式（`foo/`）匹配其下所有文件；`src/` 不会再命中 `mysrc/`
+- 只写文件名（`client.js`）时匹配任意目录下的同名文件
+- Windows 上不分大小写
+- 花括号展开（`*.{ts,tsx}`）不支持
 
 实现走宿主的 `tools/post-execute` waterfall（可 enrich 工具结果），
 只在工具参数里的 `file_path` / `path` 等字段上判断——不猜、不做语义检索。
@@ -469,6 +541,16 @@ AGENTS.md **每轮请求都会注入**，它不是存储而是常驻成本。所
 3. `~/.dsh/profiles/<name>/node_modules/leanvec`
 
 三级都找不到就降级为纯关键词检索——这是设计内的正常分支，不是故障。
+
+**为什么需要第 2 级**：`leanvec` 曾声明在本插件的 `optionalDependencies` 里，但 pnpm **不保证为 link 目标安装依赖**，
+用户下一次 `pnpm install` 就把它剪掉了，向量检索**静默退化**成纯关键词（实测发生过一次）。
+自有依赖目录不受 profile 依赖图影响，用 npm 装：
+
+```bash
+node scripts/install-deps.mjs   # 一次性，约 85 MB，装到 ~/.dsh/dsh-workspace-memory-deps
+```
+
+装完重载一次插件即可切到向量模式。`memory_status` 会显示当前是 `hybrid` 还是 `keyword`。
 
 ## 召回质量怎么衡量：金标集 + 负样本
 
@@ -511,16 +593,6 @@ leanvec 是静态嵌入，任意文本余弦都容易过 0.3，等于没有闸�
 
 预取在回合结束时清空，不会让上一轮的相关记忆污染下一轮。`prefetchRecall: false` 可关闭。
 
-**为什么需要第 2 级**：`leanvec` 曾声明在本插件的 `optionalDependencies` 里，但 pnpm **不保证为 link 目标安装依赖**，
-用户下一次 `pnpm install` 就把它剪掉了，向量检索**静默退化**成纯关键词（实测发生过一次）。
-自有依赖目录不受 profile 依赖图影响，用 npm 装：
-
-```bash
-node scripts/install-deps.mjs   # 一次性，约 85 MB，装到 ~/.dsh/dsh-workspace-memory-deps
-```
-
-装完重载一次插件即可切到向量模式。`memory_status` 会显示当前是 `hybrid` 还是 `keyword`。
-
 ## 什么值得记：判据写在工具描述里
 
 「该不该记」没法用代码判定，硬拦会误伤——"改成 X" 有时确实是长期约定。
@@ -548,16 +620,15 @@ node scripts/install-deps.mjs   # 一次性，约 85 MB，装到 ~/.dsh/dsh-work
 ## 测试
 
 ```bash
-node test/smoke.test.mjs    # 模块形状、frontmatter 解析、关键词评分、索引重建
-node test/recall.test.mjs   # 真实 leanvec：命中排序 + 无关查询零结果 + 覆盖写不重复
-node test/format.test.mjs   # 格式闸门：逐字段拒绝 + 落盘形态不变
-node test/config.test.mjs   # 配置校验：坏值退回默认、未知键忽略、生效性
-node test/pending.test.mjs  # 待确认队列生命周期 + 抽取结果解析容错
-node test/extract.test.mjs  # 抽取流水线（mock LLM）：取样→提示词→流式→解析→去重→入队
+npm test                        # 全部（node --test 自动发现 test/ 下的文件）
+node test/recall.test.mjs       # 单个文件；每个测试都是独立脚本，失败时退出码为 1
 ```
 
-六个文件统一用 `*.test.mjs` 后缀。**别只挑几个跑**：曾经因为冒烟测试叫 `smoke.mjs`、
+测试文件统一用 `*.test.mjs` 后缀，`test/fake-host.mjs` 是路由/工具测试共用的假宿主。**别只挑几个跑**：曾经因为冒烟测试叫 `smoke.mjs`、
 循环里拼成 `smoke.test.mjs`，被误判成「PowerShell 退出码不可靠」查了三次。
+
+所有测试只在临时目录里读写。涉及 AGENTS.md 的测试必须经 `apply(ctx, { agentsFile: 临时路径 })` 传配置，
+并前后比对真实 `~/.dsh/AGENTS.md`（见 `test/scope-routing.test.mjs`）。
 
 ## 配置
 
@@ -576,19 +647,32 @@ node test/extract.test.mjs  # 抽取流水线（mock LLM）：取样→提示词
 
 | 键 | 默认 | 说明 |
 | - | - | - |
-| `memoryDir` | `''` | 空 = 向上查找 `.dsh-memory`；非空必须是绝对路径或 `~/` 开头 |
+| `memoryDir` | `''` | 空 = `~/.dsh/projects/<编码后的工作区路径>/memory/`；非空必须是绝对路径或 `~/` 开头 |
 | `indexMaxLines` / `indexMaxBytes` | 200 / 25KB | 注入上限 |
 | `weightVector` / `weightKeyword` | 0.65 / 0.35 | 融合权重 |
-| `minVectorScore` / `minKeywordScore` | 0.3 / 0.5 | 入选门槛（任一达标才入选） |
+| `minScore` | 0.34 | 融合分闸门（金标集标定，见「召回质量」） |
+| `minVectorScore` / `minKeywordScore` | 0.3 / 0.5 | 前置筛（任一达标才进入融合打分） |
+| `recallMaxChars` | 12000 | 一次召回的正文总预算（少带一条，不截断正文） |
 | `maxTitleChars` / `maxBodyChars` | 200 / 20000 | 格式闸门 |
 | `maxTags` / `maxTagChars` | 20 / 40 | 格式闸门 |
-| `enableDiagEndpoint` | `false` | 诊断端点，默认关 |
+| `maxMemoryCount` | 50 | 条数硬限，满了拒写；`0` = 不限 |
+| `warnBodyChars` | 2000 | 单条正文的提醒阈值（不拦不截） |
+| `directWriteConfidence` | 0.8 | `memory_remember` 置信度 ≥ 它直写，否则进待确认 |
+| `duplicateCheck` / `duplicateThreshold` / `duplicateCandidates` | `true` / 0.62 / 3 | 写入前查重 |
+| `pathsHint` / `pathsHintLimit` | `true` / 3 | 碰到文件时的记忆提示 |
+| `prefetchRecall` / `prefetchLimit` | `true` / 3 | 用户消息预取 |
 | `enableExtraction` | `false` | 回合收尾自动抽取 |
 | `extractEveryTurns` | 5 | 抽取节流 |
 | `extractMaxPerTurn` | 3 | 单次最多入队几条 |
 | `dedupeThreshold` | 0.9 | 与已有记忆/待确认条目的余弦相似度超过它就不入队 |
 | `minExtractConfidence` | 0.6 | 抽取准入的置信度门槛，低于它的候选不入队 |
 | `historyLimit` | 20 | 每条记忆保留多少个历史版本；`0` = 不留档 |
+| `agentsFile` | `''` | 空 = `~/.dsh/AGENTS.md` |
+| `maxAgentsBytes` | 10000 | AGENTS.md 字节上限，超了拒写（缩小的编辑始终允许）；`0` = 不限 |
+| `editorExe` | `''` | 打开 AGENTS.md 用的编辑器；空 = 自动探测 |
+
+坏值**不会抛异常**：退回默认值并记录 issue（`memory_status` 可见）。一个配置笔误不该让整个记忆系统不加载。
+`enableDiagEndpoint` 已移除（诊断端点随客户端回执一起删掉了），旧配置里留着它只会被当作未知键忽略。
 
 ## 历史版本与命中计数
 
@@ -601,14 +685,13 @@ node test/extract.test.mjs  # 抽取流水线（mock LLM）：取样→提示词
 
 **命中计数**：被 `memory_recall` 召回的条目会在 frontmatter 里累加 `hits` 并写 `lastHit`。
 
+- **只改这两行**，文件其余部分逐字节不动（以前整份重写，手写的 YAML 块列表、注释会丢，每次还多一个空行）
 - 计数器**不重建 MEMORY.md**（命中不进索引），也**不留历史**（属于元数据抖动）
 - 只对**真正返回给调用方**的条目计数，未命中的不涨
 - `modified` 不会被命中改动——语义内容没变
 
 它的用途是回答「哪些记忆该淘汰」：长期 `hits = 0` 或 `lastHit` 很久以前的条目，
 就是候选。没有这个信号，记忆只会越攒越多。
-
-坏值**不会抛异常**：退回默认值并记录 issue。一个配置笔误不该让整个记忆系统不加载。
 
 ## 自动抽取与待确认队列
 
@@ -630,11 +713,12 @@ agent/turn-stopping（serial，会被 await）
 
 **默认关闭**。它会给每回合加一次模型调用，而且这个监听会被 `await`。任何环节失败都只记录、不冒泡——抽取是旁路，永远不许影响主对话。
 
-`pending/` 里的条目**不注入、不参与检索、不进 MEMORY.md**，只有 accept 之后才搬进 `memories/`。
+`pending/` 里的条目**不注入、不参与检索、不进 MEMORY.md**，只有 accept 之后才搬进正式库。
 
-## 尚未实现
-
-- **路径作用域触发**：`paths` 字段已在 frontmatter 里预留（面板也能编辑），但还没接「碰这些文件时才抬上桌面」。
+- 草稿 id 是 `dr_<时间>_<随机后缀>`：同一批候选在同一毫秒落盘时，只用时间戳会互相覆盖
+- 模型回复里候选正文带代码围栏、或前后夹着闲聊，都能正确解析；回复被截断时返回空，不猜
+- 抽取流有 60 秒墙钟上限，模型卡住时不会拖住回合收尾
+- 收下时受 `maxMemoryCount` 约束（取代旧条除外），满了返回 `library-full`，草稿留在队列里
 
 ## 许可
 

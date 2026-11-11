@@ -6,16 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DeepSeek Harness（DSH / Cordis）插件：工作区级持久记忆，仿 Claude Code 的 auto-memory 层。设计取舍与事故记录分别在 `README.md`（设计）和 `HANDOFF.MD`（当前状态 + 踩坑），改动前先读相关章节，改完同步更新。
 
-- **没有构建步骤、没有 npm scripts、没有运行时依赖**（只有可选的 `leanvec`）。纯 ESM，Node ≥ 18。
-- 本目录**不是 git 仓库**，没有版本兜底。
+- **没有构建步骤、没有运行时依赖**（只有可选的 `leanvec`）。纯 ESM，Node ≥ 18。
+- git 仓库（`main`，2026-11-11 建立），`.gitattributes` 固定 LF。插件是 link 装进 profile 的——对它做 pnpm remove/重装会顺着 junction 删穿工作区（含 `.git`），见 `~/.dsh/AGENTS.md`。
 - 以 link（junction）方式装进 DSH profile。改完后在 DSH 里对插件行 disable → enable 一次才会换模块代次；注册类改动后要确认 `application` 状态为 `applied` 且无 diagnostic，不能只看「没抛异常」。
 
 ## 常用命令
 
 ```bash
-node --check index.js && node --check client.js          # 语法检查（client.js 无法在 Node 里实际运行）
+npm test                                                  # 全部（node --test 自动发现）
 node test/recall.test.mjs                                 # 跑单个测试
-for f in test/*.test.mjs; do node "$f" >/dev/null || echo "FAIL $f"; done   # 跑全部
+node --check index.js && node --check client.js          # 语法检查（client.js 无法在 Node 里实际运行）
+node --test --experimental-test-coverage --test-coverage-include=index.js   # 覆盖率
 node eval/golden.mjs                                      # 召回金标集打分（纯本地）
 node eval/sweep-min-score.mjs                             # 扫 minScore 闸门曲线
 node eval/run.mjs                                         # 抽取准入评测（调 LLM，手动跑）
@@ -23,7 +24,7 @@ node scripts/install-deps.mjs                             # 把 leanvec 装进 ~
 node scripts/reindex.mjs                                  # 手改记忆文件后重建 MEMORY.md
 ```
 
-测试是独立脚本（自带 PASS/FAIL 打印，失败时 `process.exit(1)`），不用测试框架。**全部都跑**——README 「测试」一节只列了 6 个，实际有 19 个。没装 leanvec 时检索退化为纯关键词，`golden.test.mjs` 会自动用放宽的门槛。
+测试是独立脚本（自带 PASS/FAIL 打印，失败时 `process.exit(1)`），`node --test` 只负责发现与汇总。路由与工具测试用 `test/fake-host.mjs` 的假宿主（记录 `webServer/tools/commands` 注册、构造 req/res）。没装 leanvec 时检索退化为纯关键词，`golden.test.mjs` 会自动用放宽的门槛。
 
 ## 架构
 
@@ -37,8 +38,7 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 - 项目记忆：`~/.dsh/projects/<encodeProjectPath(项目根)>/memory/`，`MEMORY.md` 索引 + 每条一个 `<英文 slug>.md`（平铺）。插件私有状态在**同级**的 `.memory-state/{pending,history}/`。
 - 「项目根」= 包含 cwd 的**最长已注册 DSH 工作区路径**（`projectRootFor`），不是 git root。编码规则与 DSH sessions 目录一致：`C:\a\b` → `--C-a-b--`。
 - 全局记忆 = `~/.dsh/AGENTS.md`（`scope: 'global'`）。按 `## N.` 切章、写入后统一重排编号；受 `maxAgentsBytes` 硬限；更新协议是 `chapter: N` / 标题精确同名 / `newChapter: true`，三者都不满足就拒写并返回章清单（语义去重不可靠，故意不自动合并）。
-- 向量**只在进程内存**（`vectorStore`），从不落盘。`leanvec` 三级解析：常规解析 → `~/.dsh/dsh-workspace-memory-deps/` → `~/.dsh/profiles/<name>/node_modules/`；都没有则降级为纯关键词（正常分支，不是故障）。
-- 实际默认 `memoryDir` 是上面的 `~/.dsh/projects/...` 路径；README 配置表里「向上查找 `.dsh-memory`」的描述已过时。
+- 向量**只在进程内存**（`vectorStore`），从不落盘；`recall` 按内容哈希对账，缺失或过期就增量重嵌。`leanvec` 三级解析：常规解析 → `~/.dsh/dsh-workspace-memory-deps/` → `~/.dsh/profiles/<name>/node_modules/`；都没有则降级为纯关键词（正常分支，不是故障）。
 
 ### 写入路径（`memory_remember`）
 
@@ -63,6 +63,9 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 
 ## 会再踩的坑（均来自 HANDOFF 的真实事故）
 
+- **id → 路径一律走 `idFile(dir, id)`**（内含 `isSafeId` + 包含性检查），写文件一律走 `writeFileAtomic`，frontmatter 一律走 `serializeFrontmatter`（歧义值 JSON 加引号，与 `parseFrontmatter` 互逆）。直接 `path.join(dir, \`${id}.md\`)` 曾让 `memory_forget` 能删掉 `~/.dsh/AGENTS.md`。只改 `hits/lastHit` 这类元数据时用 `withFrontmatterFields` 按行修补，不要整份重写。
+- **HTTP 路由**用 `apply()` 里的 `getRoute` / `postRoute` / `replyOf` 包装：POST 强制 `application/json`（415），抛 `RequestError(status, reason, msg)` 表达可预期的失败，reason → 状态码在 `REASON_STATUS`。客户端的 `KNOWN_REASONS` 与 ZH/EN 的 `reason.*` 文案要同步加（`test/client-logic.test.mjs` 会查）。
+- **AGENTS.md 按行处理时先算 `fenceMask(lines)`**，围栏代码里的 `#` 不是标题。只有 `## N.` / `### N.M` 算编号。
 - **测试会写真实的 `~/.dsh/AGENTS.md`**：`apply(ctx, rawConfig)` 第一行就 `configure(rawConfig)`，所以「先 `configure()` 再 `apply()`」等于重置为默认路径。配置必须经 `apply(ctx, { agentsFile: 临时路径, ... })` 传入；凡涉及 AGENTS.md 的测试都要像 `test/scope-routing.test.mjs` 那样前后快照比对真实文件。
 - **新增配置键**：加进 `DEFAULT_CONFIG` 还不够，必须同时进 `STRING_KEYS` / `BOOLEAN_KEYS` / `NUMERIC_RULES` 之一，否则被静默忽略；坏值也会静默回落默认值，所以数值下限要容得下测试用值，并补一条「设置后读出来」的断言。
 - **工具返回值不能含 `undefined` / `NaN` / `Infinity`**：宿主报 `value is not lossless JSON`，但副作用已经发生，调用方重试会造成重复写入。用条件展开 `...(x ? { x } : {})`。
