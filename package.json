@@ -1,6 +1,6 @@
 {
   "name": "@lovenndme/dsh-workspace-memory",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Workspace-scoped persistent memory for DeepSeek Harness, laid out like Claude Code's memory: English-slug memory files flat beside a MEMORY.md index under ~/.dsh/projects/<encoded-workspace>/memory/, with hybrid vector + keyword recall (vectors stay in process memory, nothing derived is written to disk).",
   "type": "module",
   "main": "./index.js",

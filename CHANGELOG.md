@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.3 — 2026-11-15
+
+- ci: note why windows+node 18 is intentionally not in the matrix
+- fix: use fileURLToPath instead of import.meta.dirname so tests run on node 18
+- ci: add scheduled multi-platform test workflow (ubuntu 18/20, windows 20)
+- fix: ship scripts/install-deps.mjs so the README step works after npm install
+- docs: record the npm publish and the Linux-only CI failures
+
+
 ## 0.8.2 — 2026-11-15
 
 - release: v0.8.1
