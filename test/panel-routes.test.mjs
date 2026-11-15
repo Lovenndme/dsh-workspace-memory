@@ -420,19 +420,27 @@ section('E /open-agents：target global | team | local')
 
     // 系统默认打开交给 cmd 的命令行必须安全：路径在一对引号里、windowsVerbatimArguments，start 的标题位是空 ""
     const lastLaunch = () => launches.at(-1)
-    check('系统默认打开用 cmd /d /s /c + windowsVerbatimArguments，整条命令行自己拼', (() => {
-      const l = lastLaunch()
-      return l.command === 'cmd' && l.args[0] === '/d' && l.args[1] === '/s' && l.args[2] === '/c' && l.args.length === 4 &&
-        l.options?.windowsVerbatimArguments === true &&
-        l.args[3] === `"start "" "${localFile}""`
-    })(), JSON.stringify({ args: lastLaunch().args, opts: lastLaunch().options }))
+    if (process.platform !== 'win32') {
+      // 非 Windows 平台的「系统默认」走 xdg-open/open，没有 cmd 引号这回事
+      console.log('  SKIP  非 Windows 平台：系统默认打开不是 cmd /d /s /c')
+    } else {
+      check('系统默认打开用 cmd /d /s /c + windowsVerbatimArguments，整条命令行自己拼', (() => {
+        const l = lastLaunch()
+        return l.command === 'cmd' && l.args[0] === '/d' && l.args[1] === '/s' && l.args[2] === '/c' && l.args.length === 4 &&
+          l.options?.windowsVerbatimArguments === true &&
+          l.args[3] === `"start "" "${localFile}""`
+      })(), JSON.stringify({ args: lastLaunch().args, opts: lastLaunch().options }))
+    }
   } finally {
     host.cleanup()
   }
 }
 
-section('E /open-agents：系统默认打开时路径里的 shell 特殊字符不被 cmd 解释；% 与引号被拒')
-{
+if (process.platform !== 'win32') {
+  // 下面这整段验证的是 Windows 的 cmd 引号形态（& ^ ; % 与空格），其它平台不适用
+  section('E /open-agents：系统默认打开时路径里的 shell 特殊字符不被 cmd 解释；% 与引号被拒')
+  console.log('  SKIP  非 Windows 平台：cmd 引号形态不适用')
+} else {
   // 项目指令根的目录名里带 cmd 的特殊字符：& ( ) ^ ; 空格 逗号 ! @ = +（都是 Windows 合法文件名字符）
   // 在 cmd 双引号内它们都是普通字符，不能被当语法执行（复现 02）。`| < > "` 是 Windows 非法文件名字符，
   // 根本进不了路径；我们的引号形态对它们也安全，但无法用真实目录构造，故不在此列。
