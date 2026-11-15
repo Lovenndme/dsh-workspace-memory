@@ -685,7 +685,7 @@ console.log('\n== openAgentsFile：子进程启动失败不会变成未捕获异
   }
 }
 
-console.log('\n== openAgentsFile 系统默认分支的命令行（回归：旧写法 `start "" "\\"file\\""` 从不启动）==')
+console.log('\n== openAgentsFile 系统默认分支的命令行（2026-11-15 收窄：cmd 不再解释路径，路径在一对引号里 + windowsVerbatimArguments）==')
 {
   const env = makeEnv()
   const calls = []
@@ -706,10 +706,13 @@ console.log('\n== openAgentsFile 系统默认分支的命令行（回归：旧�
     check('只启动了一次', calls.length === 1, JSON.stringify(calls))
     const call = calls[0] ?? {}
     if (process.platform === 'win32') {
-      // 2026-11-11 用临时脚本实测过：这个形态在路径含空格时也能打开；参数里自己加引号的旧写法打不开
+      // 旧写法 `cmd /c start "" <未加引号的 file>` 会让 cmd 按 & | 等拆开路径执行（审查复现 02）。
+      // 新写法：命令行整条自己拼，路径放进一对引号里，/d 跳过 AutoRun、/s 只剥最外层引号，并打开 windowsVerbatimArguments。
       check(
-        'cmd /c start "" <原样路径>，不自己加引号',
-        call.command === 'cmd' && JSON.stringify(call.args) === JSON.stringify(['/c', 'start', '', file]),
+        'cmd /d /s /c "start "" "<file>""，windowsVerbatimArguments',
+        call.command === 'cmd' &&
+          JSON.stringify(call.args) === JSON.stringify(['/d', '/s', '/c', `"start "" "${file}""`]) &&
+          call.options?.windowsVerbatimArguments === true,
         JSON.stringify(call),
       )
     } else {

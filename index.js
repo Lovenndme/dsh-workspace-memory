@@ -37,8 +37,12 @@
 
 import { existsSync } from 'node:fs'
 import {
+  closeSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -1328,7 +1332,8 @@ export function deleteMemory(memoryDir, id) {
   // 删除同样留档——取代/清理都可能是误操作
   const current = readMemory(memoryDir, id)
   if (current?.raw) archiveVersion(memoryDir, id, current.raw)
-  rmSync(file, { force: true })
+  // 经 removeFileImpl 删：测试要能注入「删不掉」（升为全局指令后删来源失败，见 promoteToAgents 的 removeError）
+  removeFileImpl(file)
   memoryCache.delete(file)
   rebuildIndexQuietly(memoryDir)
   return true
@@ -1445,13 +1450,14 @@ export function moveMemory(fromDir, toDir, id, options = {}) {
   return { ok: true, id, file: target }
 }
 
-/** moveMemory 删源文件用的实现（测试可替换，见 setRemoveFileForTests）。 */
+/** 删记忆文件用的实现：moveMemory 删源文件、deleteMemory 删条目（测试可替换，见 setRemoveFileForTests）。 */
 const realRemoveFile = (file) => rmSync(file, { force: true })
 let removeFileImpl = realRemoveFile
 
 /**
- * 测试用：替换 moveMemory 删源文件的实现，返回还原函数。
- * 「删源失败要回滚目标」在真实文件系统上很难稳定复现（Windows 上占着的文件 Node 也能删），所以经这里注入失败。
+ * 测试用：替换删记忆文件的实现（moveMemory 删源、deleteMemory），返回还原函数。
+ * 「删源失败要回滚目标」「升为全局指令后删来源失败」在真实文件系统上很难稳定复现
+ * （Windows 上占着的文件 Node 也能删），所以经这里注入失败。
  */
 export function setRemoveFileForTests(fn) {
   const previous = removeFileImpl
@@ -1559,14 +1565,38 @@ export function parseFrontmatterBoolean(value) {
   return undefined
 }
 
+/*
+ * 给**人**看的叫法（2026-11-15 用户拍板，与重设计后的面板同一套）：只用在斜杠命令的回执里。
+ * 系统提示段、工具描述与参数说明、工具返回给模型的文字、MEMORY.md 索引一律不用这些词——
+ * 那些文字经过模型评测，改了要重测（它们沿用 project / global / AGENTS.md 等原有说法）。
+ */
+
+/** 记忆分类的显示名。 */
+export const TYPE_LABELS = { user: '关于你', feedback: '做事要求', project: '项目决定', reference: '资料位置', pitfall: '踩坑经验' }
+
+/** 两个按需库的显示名：project = 项目记忆，global = 通用记忆（所有项目都能查到）。 */
+export const LIBRARY_LABELS = { project: '项目记忆', global: '通用记忆' }
+
+/** 全局 AGENTS.md 与项目 AGENTS.md 的显示名。 */
+export const INSTRUCTION_LABELS = { global: '全局指令', project: '项目指令' }
+
+/** 分类显示名；手写文件里的怪值原样显示（不冒充成某个已知分类）。 */
+const typeLabel = (type) => TYPE_LABELS[type] ?? String(type ?? TYPE_LABELS.project)
+
 /**
  * 文字输出（/memory pending 等）里一条记忆或草稿的来源标签，规则与面板相同：
- * source 是 user 且 evidenceVerified 为真 →「用户原话」；source 是 user 但没核实（含没有该字段的旧数据）→「未核实」；
- * source 是 agent →「模型得出」；其它（没有 source 的旧数据）不标。返回值带前导空格，没有标签时是空串。
+ * source 是 user 且 evidenceVerified 为真 →「你的原话 · 已核对」；为假 →「说是你的原话 · 没核对上」；
+ * 没有这个字段（旧数据，或手写的 yes 之类认不出的值）→「你的原话 · 旧条目未核对」；
+ * source 是 agent →「Agent 总结」；其它（没有 source 的旧数据）不标。返回值带前导空格，没有标签时是空串。
  */
 export function sourceLabel(meta) {
-  if (meta?.source === 'user') return parseFrontmatterBoolean(meta.evidenceVerified) === true ? '  用户原话' : '  未核实'
-  if (meta?.source === 'agent') return '  模型得出'
+  if (meta?.source === 'user') {
+    const verified = parseFrontmatterBoolean(meta.evidenceVerified)
+    if (verified === true) return '  你的原话 · 已核对'
+    if (verified === false) return '  说是你的原话 · 没核对上'
+    return '  你的原话 · 旧条目未核对'
+  }
+  if (meta?.source === 'agent') return '  Agent 总结'
   return ''
 }
 
@@ -3006,18 +3036,18 @@ function formatAgentsBody(body, sectionNumber, { forSave = false } = {}) {
  *   2. 只追加，不改写已有章节
  *   3. 字节预算 maxAgentsBytes 与写前留档同样适用
  *   4. 删记忆走 deleteMemory，历史里留一份，可回退
- *   5. 只有跨项目的记忆才允许搬（避免把项目内知识污染成全局规则）：
- *      全局按需库里的条目（`options.scope === 'global'`）本身就是跨项目的；
- *      项目库里的条目只有 frontmatter 写着 `scope: global` 的旧条目可以搬（旧版「该挪去全局」的提示）。
- *      「只在本项目成立却要常驻」的归宿是项目自己的 AGENTS.md，不是这个全局文件。
+ *   5. 两个库的条目都能搬（2026-11-15 用户拍板「项目记忆可以一步升为全局指令」）：
+ *      以前只放行全局按需库与带旧版 `scope: global` 提示的项目库条目，其余返回 scope-not-global、
+ *      要人先换库再搬；现在一步完成，不再先移库。要不要升是人在面板里点的，插件不替人判断。
+ *
+ * `options.scope`：条目所在的库（'project' / 'global'，缺省 project），原样回在 `fromScope` 里。
+ * 章节写入失败时来源条目不动；写成功、删来源失败时整体仍算成功（AGENTS.md 已经改了，
+ * 再报失败会让人重试、多出一章），返回 `memoryRemoved: false` + `removeError`（给人看的说明），面板要常驻提示。
  */
 export function promoteToAgents(memoryDir, id, options = {}) {
+  const fromScope = options.scope === 'global' ? 'global' : 'project'
   const item = readMemory(memoryDir, id)
   if (!item) return { ok: false, reason: 'not-found', id }
-
-  if (options.scope !== 'global' && item.meta.scope !== 'global') {
-    return { ok: false, reason: 'scope-not-global', title: item.meta.title ?? id }
-  }
 
   const file = agentsFilePath()
   if (!existsSync(file)) return { ok: false, reason: 'agents-missing', agentsPath: file }
@@ -3052,12 +3082,17 @@ export function promoteToAgents(memoryDir, id, options = {}) {
     }
   }
 
-  // 搬走后从项目库删除；deleteMemory 会先留历史。AGENTS.md 已经写成功，删不掉不该报整体失败。
+  // 搬走后从来源库删除；deleteMemory 会先留历史。AGENTS.md 已经写成功，删不掉不该报整体失败。
+  const libraryName = LIBRARY_LABELS[fromScope]
   let memoryRemoved = false
+  let removeError = ''
   try {
     memoryRemoved = deleteMemory(memoryDir, id)
-  } catch {
-    // 记忆还在项目库里：重复但不丢
+    // 写章节期间文件已经没了（别处删掉或改了名）：没有重复，但也没删成，如实说
+    if (!memoryRemoved) removeError = `已写入全局指令，但${libraryName}里的这条记忆在删除前就已经不在了，没有删除任何文件`
+  } catch (error) {
+    // 记忆还在来源库里：重复但不丢
+    removeError = `已写入全局指令，但没能从${libraryName}里删除这条记忆（${error instanceof Error ? error.message : String(error)}）；它现在两处都有，请手动删除记忆里的这一条`
   }
   return {
     ok: true,
@@ -3066,6 +3101,8 @@ export function promoteToAgents(memoryDir, id, options = {}) {
     addedBytes: added.bytes - before,
     totalBytes: added.bytes,
     memoryRemoved,
+    fromScope,
+    ...(removeError ? { removeError } : {}),
   }
 }
 
@@ -3147,7 +3184,10 @@ const agentsHistoryDir = (file) => {
     : path.join(path.dirname(String(file)), '.agents-history')
 }
 
-/** 写 AGENTS.md 之前留一份历史（保留最近 20 份），误删可回退。 */
+/** AGENTS.md 写前备份保留几份（面板经 /agents 的 historyLimit 显示这个数）。 */
+const AGENTS_HISTORY_KEEP = 20
+
+/** 写 AGENTS.md 之前留一份历史（保留最近 AGENTS_HISTORY_KEEP 份），误删可回退。 */
 function backupAgentsFile(file, text) {
   try {
     const dir = agentsHistoryDir(file)
@@ -3157,7 +3197,7 @@ function backupAgentsFile(file, text) {
     const kept = readdirSync(dir)
       .filter((name) => name.endsWith('.md'))
       .sort()
-    for (const stale of kept.slice(0, Math.max(0, kept.length - 20))) {
+    for (const stale of kept.slice(0, Math.max(0, kept.length - AGENTS_HISTORY_KEEP))) {
       rmSync(path.join(dir, stale), { force: true })
     }
   } catch {
@@ -3190,6 +3230,53 @@ export function readAgentsDocument() {
     preamble: parsed.preamble.join('\n').trim(),
     sections,
   }
+}
+
+/**
+ * 面板显示全局 AGENTS.md 用的附加信息：字节上限（maxAgentsBytes，0 = 不限）、修改时间、
+ * 写前备份保留几份、备份目录（agentsHistoryDir，与 backupAgentsFile 同一个）。
+ * 只加在 /agents 与 /agents/sections 的路由响应上：readAgentsDocument / agentsStatus 的返回值
+ * 还流进 memory_remember（planAgentsChapter 失败时原样返回），不能往给模型看的结果里塞字段。
+ * `exists`：文件不存在（或读不到）时 mtime 为 null。
+ */
+function agentsFileFacts(exists) {
+  const file = agentsFilePath()
+  let mtime = null
+  if (exists) {
+    try {
+      mtime = statSync(file).mtime.toISOString()
+    } catch {
+      mtime = null
+    }
+  }
+  return { limit: CONFIG.maxAgentsBytes, mtime, historyLimit: AGENTS_HISTORY_KEEP, historyDir: agentsHistoryDir(file) }
+}
+
+/** 新建的全局 AGENTS.md 的内容：一行文档标题（算前言，不成章），之后追加的章都在它下面。 */
+const NEW_AGENTS_TEXT = '# AGENTS.md\n'
+
+/**
+ * 全局 AGENTS.md 不存在时新建它（面板「创建」按钮）。**只在不存在时创建**：已存在（含悬空的符号链接、
+ * 同名目录）返回 already-exists，绝不覆盖用户的文件。父目录不存在时一并创建。
+ *
+ * 这里不走 writeFileAtomic：原子写靠 rename 落盘，rename 会覆盖目标，做不到「已存在就不写」；
+ * 独占创建（`wx`）才能在「检查」与「写」之间不留被覆盖的窗口。内容只有一行，写到一半的风险可以忽略。
+ *
+ * 判存在用 `lstatSync`（不跟随链接）而不是 `existsSync`：悬空的 junction / 符号链接 existsSync 为 false，
+ * 但那个位置已经有目录项，`wx` 在 Windows 上会穿过链接在目标处建出东西（复现 05）。任何已有目录项——
+ * 普通文件、目录、死链——都当成 already-exists，绝不动它。
+ */
+export function createAgentsFile() {
+  const file = agentsFilePath()
+  if (lstatSync(file, { throwIfNoEntry: false })) return { ok: false, reason: 'already-exists', path: file }
+  try {
+    ensureDir(path.dirname(file))
+    writeFileSync(file, NEW_AGENTS_TEXT, { encoding: 'utf8', flag: 'wx' })
+  } catch (error) {
+    if (error?.code === 'EEXIST') return { ok: false, reason: 'already-exists', path: file }
+    return { ok: false, reason: 'write-failed', path: file, error: error instanceof Error ? error.message : String(error) }
+  }
+  return { ok: true, path: file, bytes: Buffer.byteLength(NEW_AGENTS_TEXT, 'utf8') }
 }
 
 /**
@@ -3573,14 +3660,56 @@ function launchDetached(command, args, options = {}) {
 }
 
 /**
- * 打开全局 AGENTS.md。
+ * 会越过「双引号包住路径」这道防护的字符：
+ *   · `%` 触发 cmd 的环境变量展开（发生在引号处理之前，引号挡不住）；
+ *   · `"` 会提前闭合引号，让后面的内容落到引号外被 cmd 解释。
+ * 这两类在 Windows 路径里一个合法（`%`，如目录名 `q%OS%q`）、一个非法（`"`），一律拒绝不冒险。
+ * `& | < > ^ ( ) , ; ! @` 以及空格在双引号内都是普通字符，不在此列。
+ */
+const CMD_UNSAFE_PATH = /["%]/
+
+/**
+ * Windows 上经 cmd 启动，但命令行**自己拼、全程 windowsVerbatimArguments**，把每个路径放进一对双引号里。
+ *
+ * 为什么这样安全：`cmd /d /s /c "<inner>"` 中 `/s` 只把最外层的一对引号剥掉、其余原样执行；
+ * 路径都在内层的一对双引号里，cmd 在双引号内不把 `& | < > ^ ( ) , ;` 和空格当语法——复现 02 里
+ * `p&ver&echo` 这种目录名不会再触发 `ver`。唯一能越过引号的 `%` / `"` 由 CMD_UNSAFE_PATH 事先拒绝。
+ * `/d` 跳过 AutoRun 注册表命令（防注册表侧注入）。
+ *
+ * `inner` 是去掉最外层引号后要执行的命令（路径已各自带好双引号）；`paths` 是其中所有来自文件系统的路径，
+ * 逐个过 CMD_UNSAFE_PATH。返回 false = 有路径不安全、**没有**启动。
+ */
+function launchViaCmd(inner, paths) {
+  if (paths.some((p) => CMD_UNSAFE_PATH.test(p))) return false
+  launchDetached('cmd', ['/d', '/s', '/c', `"${inner}"`], { windowsVerbatimArguments: true })
+  return true
+}
+
+/** 路径含 % 或引号、无法安全交给 cmd 时的失败信封（给人看的中文说明，复用已知原因码 launch-failed）。 */
+const unsafePathFailure = (file, how) => ({
+  ok: false,
+  reason: 'launch-failed',
+  agentsPath: file,
+  error: `文件路径含 % 或引号，无法安全地${how}；这类字符很少见，请换一个「打开方式」里的编辑器，或手动打开该文件`,
+})
+
+/**
+ * 打开全局 AGENTS.md（或 `options.file` 指定的项目指令文件）。
  *
  * editorId 为空时用配置的 editorExe；都不可用则退回系统默认程序。
  * 启动后立刻 unref，不等它退出——编辑器是长驻进程。
+ *
+ * `options.file`：只由 /open-agents 路由在 target 为 team / local 时传入，而且必须是
+ * locateWorkspaceFile 校验过的「工作区根 + 固定文件名」（不接受客户端路径）。
+ * 指定的文件不存在返回 `file-missing`（带 path）；全局文件不存在仍是 `agents-missing`。
+ * 返回值的 `agentsPath` 是实际打开的那个文件。
  */
-export function openAgentsFile(editorId) {
-  const file = agentsFilePath()
-  if (!existsSync(file)) return { ok: false, reason: 'agents-missing', agentsPath: file }
+export function openAgentsFile(editorId, options = {}) {
+  const custom = typeof options?.file === 'string' && options.file !== ''
+  const file = custom ? options.file : agentsFilePath()
+  if (!existsSync(file)) {
+    return custom ? { ok: false, reason: 'file-missing', path: file, agentsPath: file } : { ok: false, reason: 'agents-missing', agentsPath: file }
+  }
 
   const editors = detectEditors()
   const wanted =
@@ -3592,22 +3721,129 @@ export function openAgentsFile(editorId) {
   try {
     if (wanted && wanted.exe) {
       if (wanted.viaShell) {
-        // .cmd 转发器必须经 shell 启动，否则 spawn 会 ENOENT 或参数丢失
-        launchDetached(`"${wanted.exe}" "${file}"`, [], { shell: true })
+        // .cmd 转发器要经 cmd 才能跑（直接 spawn 会 ENOENT）。但不能再用 shell:true + 手拼字符串：
+        // 那样目录名里的 %VAR% 会被 cmd 展开，打开的就不是校验过的那个文件（复现 02 的 viaShell 分支）。
+        // 改走 launchViaCmd：exe 与 file 各自在一对引号里，% / " 事先拒绝。
+        if (!launchViaCmd(`"${wanted.exe}" "${file}"`, [wanted.exe, file])) {
+          return unsafePathFailure(file, `经「${wanted.name}」的命令行打开`)
+        }
       } else {
+        // 直接起可执行文件、不经 shell：Node 自己按 CommandLineToArgvW 规则给参数加引号，没有 shell 解释，路径原样到达
         launchDetached(wanted.exe, [file])
       }
       return { ok: true, agentsPath: file, app: wanted.name, editorId: wanted.id }
     }
     if (process.platform === 'win32') {
-      // 参数不要自己加引号：Node 会按需加并把内嵌引号转义成 \"，cmd 读不懂，start 就打不开文件
-      launchDetached('cmd', ['/c', 'start', '', file])
+      // 系统默认打开经 `start`，但不再让 cmd 解释路径：start 的标题位给空 ""，文件在一对引号里，
+      // 命令行自己拼 + windowsVerbatimArguments（见 launchViaCmd）。旧写法 `cmd /c start "" <file>`
+      // 里未加引号的 <file> 会被 cmd 按 & | 等拆开执行（复现 02）。
+      if (!launchViaCmd(`start "" "${file}"`, [file])) {
+        return unsafePathFailure(file, '用系统默认程序打开')
+      }
       return { ok: true, agentsPath: file, app: 'system-default', editorId: 'system' }
     }
+    // 非 Windows：xdg-open + 参数数组，不经 shell，路径里的特殊字符不被解释
     launchDetached('xdg-open', [file])
     return { ok: true, agentsPath: file, app: 'system-default', editorId: 'system' }
   } catch (error) {
     return { ok: false, reason: 'launch-failed', agentsPath: file, error: String(error?.message ?? error) }
+  }
+}
+
+/* ------------------------- 项目指令（只读）：项目指令根下的 AGENTS.md / AGENTS.local.md */
+
+/**
+ * 面板「指令 · 本项目」只认项目指令根下这两个**固定文件名**：team = 进 git 的 AGENTS.md，
+ * local = 只对自己成立的 AGENTS.local.md。路由不接受客户端传入的任何路径——读哪个文件由这张表决定。
+ * 根目录 = instructionsRootFor(cwd)（往上最近的 .git，找不到就是 cwd 本身）：宿主就是从这里加载项目指令的，
+ * 面板要给人看「真正被加载的那两份」。它不是 workspaceRootOf（记忆库的键，最长的已注册工作区）——
+ * 会话 cwd 在工作区下的某个子仓库里时，两者是不同的目录（2026-11-15 协调者决定，推翻最初按工作区根读）。
+ */
+export const PROJECT_AGENTS_FILES = { team: 'AGENTS.md', local: 'AGENTS.local.md' }
+
+/** 项目指令正文最多读多少（UTF-8 字节）；超出按字符边界截断并标 truncated，bytes 仍是真实大小。 */
+export const PROJECT_AGENTS_MAX_BYTES = 64 * 1024
+
+/** `target` 是否在目录 `base` 之内（不含 base 本身；Windows 不分大小写）。两者都应是 realpath。 */
+function isInsideDir(base, target) {
+  const fold = process.platform === 'win32' ? (p) => p.toLowerCase() : (p) => p
+  const rel = path.relative(fold(path.resolve(base)), fold(path.resolve(target)))
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
+}
+
+/**
+ * 定位工作区根下的一个固定文件名，**不跟随符号链接 / junction 逃出工作区**：
+ * 文件的 realpath 必须落在工作区根的 realpath 之内，否则当作不存在。返回：
+ *   { path, state: 'missing' }          不存在、悬空链接，或链接指到了工作区外
+ *   { path, state: 'error', error }     存在但没法当文件读（同名目录、链接成环、权限……）
+ *   { path, state: 'ok', real, stat }   可读的普通文件（real = 校验过的真实路径）
+ * `path` 永远是「工作区根 + 固定文件名」，不是 realpath：给人看的是自己认得的位置。
+ */
+function locateWorkspaceFile(root, name) {
+  const file = path.join(root, name)
+  const describe = (error) => (error instanceof Error ? error.message : String(error))
+  let rootReal
+  try {
+    rootReal = realpathSync(root)
+  } catch {
+    return { path: file, state: 'missing' }
+  }
+  let real
+  try {
+    real = realpathSync(file)
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { path: file, state: 'missing' }
+    return { path: file, state: 'error', error: `无法解析这个文件：${describe(error)}` }
+  }
+  if (!isInsideDir(rootReal, real)) return { path: file, state: 'missing' }
+  let stat
+  try {
+    stat = statSync(real)
+  } catch (error) {
+    return { path: file, state: 'error', error: `无法读取文件信息：${describe(error)}` }
+  }
+  if (!stat.isFile()) return { path: file, state: 'error', error: '同名的不是普通文件（可能是目录）' }
+  return { path: file, state: 'ok', real, stat }
+}
+
+/**
+ * 读文件开头至多 `limit` 字节并解成 UTF-8：只读 limit + 1 字节（够判断是否超出），
+ * 截断点落在多字节字符中间时退到那个字符的首字节之前，绝不劈开一个字符。
+ */
+function readUtf8Prefix(file, limit) {
+  const fd = openSync(file, 'r')
+  try {
+    const buffer = Buffer.alloc(limit + 1)
+    let total = 0
+    while (total < buffer.length) {
+      const count = readSync(fd, buffer, total, buffer.length - total, total)
+      if (count === 0) break
+      total += count
+    }
+    if (total <= limit) return { body: buffer.toString('utf8', 0, total), truncated: false }
+    // buffer[end] 是续字节（10xxxxxx）= 截断点劈开了一个字符；UTF-8 一个字符最多 3 个续字节
+    let end = limit
+    for (let back = 0; back < 3 && end > 0 && (buffer[end] & 0xc0) === 0x80; back += 1) end -= 1
+    return { body: buffer.toString('utf8', 0, end), truncated: true }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * 项目指令文件的只读信息（/project-agents 的 team / local）：
+ * `{ path, exists, bytes, mtime, body, truncated }`，读不出来时另带 `error`（给人看的说明）且 body 为空。
+ */
+export function projectAgentsFileInfo(root, name) {
+  const located = locateWorkspaceFile(root, name)
+  const absent = { path: located.path, exists: false, bytes: 0, mtime: null, body: '', truncated: false }
+  if (located.state === 'missing') return absent
+  if (located.state === 'error') return { ...absent, exists: true, error: located.error }
+  const facts = { path: located.path, exists: true, bytes: located.stat.size, mtime: located.stat.mtime.toISOString() }
+  try {
+    return { ...facts, ...readUtf8Prefix(located.real, PROJECT_AGENTS_MAX_BYTES) }
+  } catch (error) {
+    return { ...facts, body: '', truncated: false, error: `读取失败：${error instanceof Error ? error.message : String(error)}` }
   }
 }
 
@@ -3786,8 +4022,9 @@ export function validateMemoryPatch(input) {
  * 把一条记忆摊平成 UI 需要的形状。
  *
  * `library`：条目所在的库（'project' / 'global'）。给了就以它为 scope——位置就是适用范围；
- * 没给（待确认草稿）就读 frontmatter。项目库里写着 `scope: global` 的旧条目 scope 报 project，
- * 但 `promotable: true`（仍可搬进 AGENTS.md，见 promoteToAgents）。
+ * 没给（待确认草稿）就读 frontmatter。
+ * `promotable`：已确认条目一律 true——`/promote` 现在两个库都接受（2026-11-15），面板不能再按旧规则置灰
+ * 项目记忆的「升为全局指令」。草稿还不在任何库里，恒 false。
  * confidence 只在旧文件里有、且是有限数字时才给出：新条目不再有这个字段，编一个 0.8 出来会误导。
  */
 function toUiShape(item, library) {
@@ -3809,8 +4046,8 @@ function toUiShape(item, library) {
     type: MEMORY_TYPES.includes(item.meta.type) ? item.meta.type : 'project',
     scope,
     load: draft ? draft.load : 'on-demand',
-    // 草稿还不在任何库里，谈不上提升；已确认条目：全局库的、或带旧版 global 提示的项目库条目
-    promotable: !draft && (scope === 'global' || item.meta.scope === 'global'),
+    // 草稿还不在任何库里，谈不上提升；已确认条目一律可升（/promote 两个库都接受）
+    promotable: !draft,
     ...(draft
       ? {
           newChapter: item.meta.newChapter === true || item.meta.newChapter === 'true',
@@ -3917,6 +4154,10 @@ const REASON_STATUS = {
   'move-failed': 409,
   // 删源失败、回滚目标也失败：两个库里各有一份
   'move-partial': 409,
+  // 用编辑器打开项目指令（open-agents 的 target: team / local）时文件不存在（带 path）
+  'file-missing': 400,
+  // 新建全局 AGENTS.md 时那个位置已经有东西：不覆盖（带 path）。与 target-exists 同类——「目标已存在」是 409
+  'already-exists': 409,
 }
 
 /**
@@ -4802,8 +5043,27 @@ function memoryDirOf(ctx, who = {}) {
 }
 
 /**
+ * 会话的工作区根：项目记忆库编码前的那个路径（projectRootFor，包含工作目录的最长已注册工作区）。
+ * 面板显示工作区名（/list 与 /project-agents 的 workspace 字段）按它。拿不到工作目录返回 null，同样绝不猜。
+ * 配置了固定的 memoryDir 时记忆库不再按工作区分，但工作区根照样按会话算。
+ * 项目指令文件**不**在这里找，见 instructionsRootOf。
+ */
+function workspaceRootOf(ctx, who = {}) {
+  const cwd = sessionCwdOf(ctx, who)
+  if (!cwd) return null
+  refreshWorkspaceRoots(ctx)
+  return projectRootFor(cwd)
+}
+
+/** 目录 → 面板显示用的 `{ path, name }`：name 是真实路径的最后一段（不是编码后的目录名）。 */
+function dirInfo(root) {
+  return { path: root, name: path.basename(root) || root }
+}
+
+/**
  * 会话的「项目指令根」（instructionsRootFor：往上最近的 .git 目录，找不到就是工作目录）。
- * 只用于告诉模型「项目 AGENTS.md 在哪」，插件不读写那个文件。拿不到工作目录返回 null。
+ * 告诉模型「项目 AGENTS.md 在哪」；面板只读展示 / 用编辑器打开项目指令（/project-agents、/open-agents 的
+ * team / local）也按它——插件不写那两个文件。拿不到工作目录返回 null。
  */
 function instructionsRootOf(ctx, who = {}) {
   const cwd = sessionCwdOf(ctx, who)
@@ -5410,6 +5670,20 @@ export function apply(ctx, rawConfig) {
       return memoryDir
     }
 
+    /** 请求对应的工作区根；session 查不到同样是 400（与 memoryDirFor 同一条闸门）。 */
+    const workspaceRootFor = (req) => {
+      const root = workspaceRootOf(ctx, { sessionId: sessionIdOf(req) })
+      if (!root) throw new RequestError(400, 'no-session', '无法确定工作区：请求缺少有效的 session 参数')
+      return root
+    }
+
+    /** 请求对应的项目指令根（instructionsRootOf：往上最近的 .git，找不到就是 cwd）；session 查不到同样是 400。 */
+    const projectInstructionsRootFor = (req) => {
+      const root = instructionsRootOf(ctx, { sessionId: sessionIdOf(req) })
+      if (!root) throw new RequestError(400, 'no-session', '无法确定工作区：请求缺少有效的 session 参数')
+      return root
+    }
+
     /** 请求体里的记忆 id；空或不安全（会逃出记忆目录）就是 400 invalid-id，不碰任何文件。 */
     const memoryIdOf = (body) => {
       const id = typeof body?.id === 'string' ? body.id.trim() : ''
@@ -5453,10 +5727,29 @@ export function apply(ctx, rawConfig) {
             globalRoot: globalMemoryDirOf(),
             // 两个库的条目都在这里，每条带 scope（= 所在的库）
             memories: libraries.flatMap((library) => listMemories(library.dir).map((item) => toUiShape(item, library.scope))),
-            // 草稿只在会话所在项目的队列里；scope / load 读草稿自己的 frontmatter
-            pending: listPending(memoryDir).map((item) => ({ ...toUiShape(item), status: 'draft' })),
+            // 草稿只在会话所在项目的队列里；scope / load 读草稿自己的 frontmatter。
+            // slug = 收下后要用的文件名：过一遍 acceptPending 实际用的 asciiSlug，显示值才和落盘文件名一致
+            // （手写 / 旧草稿里 slug 可能是未规范的原文，复现 04b）；没有就是空串；收下时撞名会再加 -2。
+            pending: listPending(memoryDir).map((item) => {
+              const raw = typeof item.meta.slug === 'string' ? item.meta.slug.trim() : ''
+              return { ...toUiShape(item), status: 'draft', slug: raw ? asciiSlug(raw) : '' }
+            }),
             pendingEnabled: CONFIG.enableExtraction,
             agentWrites: CONFIG.agentWrites,
+            // 以下为面板重设计新增（只增不改）
+            workspace: dirInfo(workspaceRootFor(req)),
+            // 宿主实际生效的上限：maxMemoryCount 来自配置（0 = 不限，两个库分别计数）；
+            // 其余就是 validateMemoryPatch 用的那几个值（长度按 JS 字符串长度算）。客户端以它为准，不再写死。
+            limits: {
+              maxMemoryCount: CONFIG.maxMemoryCount,
+              maxTitleChars: CONFIG.maxTitleChars,
+              maxDescriptionChars: MAX_DESCRIPTION_CHARS,
+              maxBodyChars: CONFIG.maxBodyChars,
+              maxTags: CONFIG.maxTags,
+              maxTagChars: CONFIG.maxTagChars,
+            },
+            // 两个库各自的历史版本目录（archiveVersion 写在 <目录>/<id>/ 下），只用于展示
+            historyDir: { project: historyPath(memoryDir), global: historyPath(globalMemoryDirOf()) },
           },
         }
       }),
@@ -5546,11 +5839,16 @@ export function apply(ctx, rawConfig) {
      * 写路由靠上面的 Content-Type 闸门挡住跨站的简单请求。 */
     register(
       `${API}/agents`,
-      // 顺带把探测到的编辑器一起给出去，界面据此渲染「打开方式」下拉
-      getRoute(() => ({ status: 200, payload: { ok: true, agents: agentsStatus(), editors: detectEditors() } })),
+      // 顺带把探测到的编辑器一起给出去，界面据此渲染「打开方式」下拉。
+      // agents 里另带 limit / mtime / historyLimit / historyDir（agentsFileFacts，只加在路由响应上）
+      getRoute(() => {
+        const status = agentsStatus()
+        return { status: 200, payload: { ok: true, agents: { ...status, ...agentsFileFacts(status.exists) }, editors: detectEditors() } }
+      }),
     )
 
-    // 两个库的条目都能提升为 AGENTS.md 的一章；body.scope 指明条目在哪个库（缺省时两个库都找）
+    // 两个库的条目都能一步升为全局指令（AGENTS.md 的一章）：项目库的条目不再要求先换库（2026-11-15）。
+    // body.scope 指明条目在哪个库（缺省时两个库都找）；成功响应带 fromScope，删来源失败带 removeError
     register(
       `${API}/promote`,
       postRoute(async (body, req) => {
@@ -5562,12 +5860,63 @@ export function apply(ctx, rawConfig) {
       }),
     )
 
+    /*
+     * 用外部编辑器打开指令文件。`target`：缺省 / 'global' = 全局 AGENTS.md（不需要 session，与以前完全一致）；
+     * 'team' / 'local' = 项目指令根（instructionsRootOf，往上最近的 .git）下的 AGENTS.md / AGENTS.local.md（必须带 session），
+     * 与 /project-agents 是同一个固定文件、同一套「不逃出这个根」的校验。文件不存在 → 400 file-missing（带 path），不替人新建。
+     */
     register(
       `${API}/open-agents`,
-      postRoute(async (body) => replyOf(openAgentsFile(typeof body?.editor === 'string' ? body.editor : ''))),
+      postRoute(async (body, req) => {
+        const editor = typeof body?.editor === 'string' ? body.editor : ''
+        const target = body?.target === undefined || body?.target === null || body?.target === '' ? 'global' : body.target
+        if (target === 'global') return replyOf(openAgentsFile(editor))
+        // 必须先判是字符串：Object.hasOwn 会把 ['team'] 转成字符串 'team' 当成命中，数组就被当 team 放行了
+        if (typeof target !== 'string' || !Object.hasOwn(PROJECT_AGENTS_FILES, target)) {
+          throw new RequestError(400, 'invalid-target', 'target: 只能是 global、team 或 local')
+        }
+        const located = locateWorkspaceFile(projectInstructionsRootFor(req), PROJECT_AGENTS_FILES[target])
+        if (located.state !== 'ok') return replyOf({ ok: false, reason: 'file-missing', path: located.path, agentsPath: located.path })
+        return replyOf(openAgentsFile(editor, { file: located.path }))
+      }),
     )
 
-    register(`${API}/agents/sections`, getRoute(() => ({ status: 200, payload: readAgentsDocument() })))
+    // 文件不存在时 payload 是 { ok:false, reason:'agents-missing', path }（HTTP 仍是 200，沿用旧行为），同样带上 limit / historyDir
+    register(
+      `${API}/agents/sections`,
+      getRoute(() => {
+        const doc = readAgentsDocument()
+        return { status: 200, payload: { ...doc, ...agentsFileFacts(doc.ok) } }
+      }),
+    )
+
+    // 新建全局 AGENTS.md：只在不存在时创建（已存在 400 already-exists），内容是一行 `# AGENTS.md`
+    register(`${API}/agents/create`, postRoute(async () => replyOf(createAgentsFile())))
+
+    /*
+     * 「指令 · 本项目」页的只读数据：项目指令根下 AGENTS.md（team）与 AGENTS.local.md（local）。
+     * 根 = instructionsRootOf（往上最近的 .git，找不到就是 cwd）——宿主实际加载项目指令的位置，放在顶层 `root`；
+     * `workspace` 仍是工作区根（与 /list 一致），两者在子仓库里会不同。
+     * 只看这两个固定文件名，不接受客户端传路径；经符号链接逃出 `root` 的当作不存在；正文最多 64 KiB。
+     * 单个文件读不出来只在那一项上带 error，整体仍是 200。
+     */
+    register(
+      `${API}/project-agents`,
+      getRoute((req) => {
+        const workspace = workspaceRootFor(req)
+        const root = projectInstructionsRootFor(req)
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            workspace: dirInfo(workspace),
+            root: dirInfo(root),
+            team: projectAgentsFileInfo(root, PROJECT_AGENTS_FILES.team),
+            local: projectAgentsFileInfo(root, PROJECT_AGENTS_FILES.local),
+          },
+        }
+      }),
+    )
 
     // `index` 原样交给 saveAgentsSection / deleteAgentsSection 校验（必须是真整数，不做字符串转换）；
     // `expectedTitle` 是面板打开这一章时看到的标题，序号过期就返回 section-moved（409），不改错章。
@@ -6459,17 +6808,22 @@ export function apply(ctx, rawConfig) {
     () =>
       ctx.commands.register({
         name: 'memory_list',
-        description: '在右侧栏打开记忆面板：卡片式浏览、编辑并保存工作区记忆',
+        description: '打开记忆面板：总览、待确认、指令、记忆',
         handler: (invocation) => {
           try {
             const memoryDir = memoryDirOf(ctx, { agent: invocation?.agent })
             if (!memoryDir) {
               return { kind: 'error', text: '无法定位工作区记忆库：当前会话没有可用工作目录。' }
             }
-            const count = listMemories(memoryDir).length
+            // 两个库分开计数（条数上限也是分开算的）；这段只给人看，用面板上的叫法
+            const counts = librariesFor(memoryDir).map((library) => `${LIBRARY_LABELS[library.scope]} ${listMemories(library.dir).length} 条`)
+            const drafts = listPending(memoryDir).length
             return {
               kind: 'success',
-              text: `右侧栏已打开记忆面板（${count} 条记忆）。可直接在卡片里编辑并保存。`,
+              text:
+                `右侧栏已打开记忆面板：${counts.join('，')}，待确认 ${drafts} 条。\n` +
+                '面板分四页：总览看各类内容放在哪、每轮固定带上多少；待确认里逐条收下或丢弃；' +
+                `指令里按章编辑${INSTRUCTION_LABELS.global}、查看本项目的${INSTRUCTION_LABELS.project}；记忆里查看和编辑${LIBRARY_LABELS.project}与${LIBRARY_LABELS.global}。`,
             }
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error)
@@ -6508,61 +6862,73 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
   const sub = argv[0] ?? 'overview'
 
   try {
+    // 以下回执只给人看（斜杠命令的结果卡片），用面板上的叫法：项目记忆 / 通用记忆 / 全局指令 / 项目指令，
+    // 分类与来源也用 TYPE_LABELS / sourceLabel。库的英文键（project / global）只在要手打参数的地方留着。
+    const libraries = librariesFor(memoryDir)
+
     if (sub === 'overview' || sub === '') {
-      const items = listMemories(memoryDir)
       const index = readIndexForInjection(memoryDir)
       const vectors = loadVectors(memoryDir)
       const embedder = await resolveEmbedder()
-      const byType = new Map()
-      for (const item of items) {
-        const type = item.meta.type ?? 'project'
-        byType.set(type, (byType.get(type) ?? 0) + 1)
-      }
-      const globalLibrary = librariesFor(memoryDir).find((library) => library.scope === 'global')
+      const limitText = CONFIG.maxMemoryCount > 0 ? `（上限 ${CONFIG.maxMemoryCount} 条）` : ''
+      const libraryLines = libraries.flatMap((library) => {
+        const items = listMemories(library.dir)
+        const byType = new Map()
+        for (const item of items) {
+          const type = item.meta.type ?? 'project'
+          byType.set(type, (byType.get(type) ?? 0) + 1)
+        }
+        const breakdown = MEMORY_TYPES.filter((type) => byType.has(type)).map((type) => `${TYPE_LABELS[type]} ${byType.get(type)}`)
+        return [
+          `${LIBRARY_LABELS[library.scope]}：${items.length} 条${limitText}${breakdown.length > 0 ? `  ${breakdown.join(' · ')}` : ''}`,
+          `  位置：${library.dir}`,
+          ...(library.scope === 'project'
+            ? [`  索引：${Buffer.byteLength(index, 'utf8')} 字节 / ${index ? index.split(/\r?\n/).length : 0} 行`]
+            : []),
+        ]
+      })
       const lines = [
-        `Memory root: ${memoryDir}`,
-        `Memories: ${items.length}`,
-        ...MEMORY_TYPES.filter((type) => byType.has(type)).map((type) => `  ${type}: ${byType.get(type)}`),
-        `Index: ${Buffer.byteLength(index, 'utf8')} bytes / ${index.split(/\r?\n/).length} lines`,
-        ...(globalLibrary
-          ? [`Global (all projects, on-demand): ${listMemories(globalLibrary.dir).length} memories in ${globalLibrary.dir}`]
-          : []),
-        `Agent-sourced writes: ${CONFIG.agentWrites}`,
-        `Embedder: ${embedder ? 'leanvec dim 256' : 'unavailable (keyword-only)'}`,
-        `Vectors: ${vectors ? `${vectors.entries.length} entries` : 'not built'}`,
+        ...libraryLines,
+        `Agent 总结的记忆：${CONFIG.agentWrites === 'direct' ? '直接写入（agentWrites: direct）' : '先进待确认（agentWrites: review）'}`,
+        `检索：${embedder ? '向量 + 关键词（leanvec，256 维）' : '只用关键词（没有可用的 leanvec）'}`,
+        `向量：${vectors ? `${vectors.entries.length} 条` : '还没建立'}`,
         '',
-        'Subcommands: /memory list | /memory pending | /memory accept <id> | /memory reject <id> | /memory extract | /memory forget <id> [project|global] | /memory reindex',
+        '子命令：/memory list | /memory pending | /memory accept <id> | /memory reject <id> | /memory extract | /memory forget <id> [project|global] | /memory reindex',
         CONFIG.enableExtraction
-          ? 'Extraction is ON (every N turns); /memory extract runs it now.'
-          : 'Extraction is OFF in config; /memory extract still runs it once on demand.',
+          ? '自动抽取：已开启（每 N 回合一次）；/memory extract 立刻跑一次。'
+          : '自动抽取：配置里未开启；/memory extract 仍可手动跑一次。',
       ]
       return { kind: 'success', text: lines.join('\n') }
     }
 
     if (sub === 'list') {
-      // 两个库都列出来，每行标出所在的库（project = 本工作区，global = 所有项目按需）
-      const rows = librariesFor(memoryDir).flatMap((library) =>
-        listMemories(library.dir).map((item) => {
+      // 两个库分开列，每组标题带库名与条数；括号里的 project / global 是 /memory forget 要写的那个词
+      const groups = libraries.map((library) => ({ library, items: listMemories(library.dir) }))
+      if (groups.every((group) => group.items.length === 0)) {
+        const names = libraries.map((library) => LIBRARY_LABELS[library.scope])
+        return { kind: 'success', text: names.length > 1 ? `${names.join('和')}里都还没有记忆。` : `${names[0]}里还没有记忆。` }
+      }
+      const lines = groups.flatMap(({ library, items }) => [
+        `${LIBRARY_LABELS[library.scope]}（${library.scope}）${items.length} 条：`,
+        ...items.map((item) => {
           const title = item.meta.title || item.body.split(/\r?\n/)[0] || item.id
-          return `${item.id}  [${item.meta.type ?? 'project'}]  [${library.scope}]  ${title}`
+          return `  ${item.id}  [${typeLabel(item.meta.type ?? 'project')}]  ${title}`
         }),
-      )
-      if (rows.length === 0) return { kind: 'success', text: 'No memories recorded yet.' }
-      return { kind: 'success', text: rows.join('\n') }
+      ])
+      return { kind: 'success', text: lines.join('\n') }
     }
 
     if (sub === 'reindex') {
       // 两个库都重建：手改过全局按需库文件后，同样需要这条出路
       const lines = []
-      for (const library of librariesFor(memoryDir)) {
+      for (const library of libraries) {
         // 全局按需库还不存在时不要凭空建出来
         if (library.scope === 'global' && !existsSync(library.dir)) continue
         const rebuilt = rebuildIndex(library.dir)
         const built = await rebuildVectors(library.dir)
-        const prefix = library.scope === 'global' ? 'Global index rebuilt' : 'Index rebuilt'
         lines.push(
-          `${prefix}: ${rebuilt.count} memories, ${rebuilt.lineCount} lines / ${rebuilt.byteCount} bytes.`,
-          `Vector index: ${built.mode}${built.indexed !== undefined ? `, ${built.indexed} entries` : ''}.`,
+          `${LIBRARY_LABELS[library.scope]}的索引已重建：${rebuilt.count} 条，${rebuilt.lineCount} 行 / ${rebuilt.byteCount} 字节。`,
+          `  向量：${built.mode}${built.indexed !== undefined ? `，${built.indexed} 条` : ''}。`,
         )
       }
       return { kind: 'success', text: lines.join('\n') }
@@ -6578,19 +6944,28 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
             : '待确认队列为空。自动抽取未开启（config 里 enableExtraction），可以用 /memory extract 手动跑一次。',
         }
       }
-      // 每条标出收下后的去向（scope × load），以及来源：模型自己得出的要多看一眼
-      const destination = ({ scope, load }) =>
-        load === 'always'
-          ? scope === 'global'
-            ? `→ ${agentsFileDisplay()}（每轮常驻）`
-            : '→ 本项目常驻（应写进项目 AGENTS.md，插件不收）'
-          : scope === 'global'
-            ? '→ 所有项目（按需）'
-            : '→ 本工作区'
+      // 每条标出收下后的去向（scope × load），以及来源：Agent 总结的要多看一眼。
+      // 写进全局指令的草稿按章标题定位（与 acceptPending 同口径），所以这里说「更新哪一章」而不报章号
+      const destination = (meta) => {
+        const { scope, load } = draftTarget(meta)
+        if (load === 'always') {
+          if (scope !== 'global') return `→ ${INSTRUCTION_LABELS.project}（应写进项目自己的 AGENTS.md，插件不收）`
+          const chapterTitle = typeof meta.chapterTitle === 'string' ? meta.chapterTitle.trim() : ''
+          const chapter = /^\d+$/.test(String(meta.chapter ?? '').trim()) ? Number(meta.chapter) : 0
+          const newChapter = meta.newChapter === true || meta.newChapter === 'true'
+          const action = newChapter || (!chapterTitle && chapter <= 0)
+            ? '新增一章'
+            : chapterTitle
+              ? `更新「${chapterTitle}」这一章`
+              : `更新第 ${chapter} 章，但草稿没记章标题，收下会失败`
+          return `→ ${INSTRUCTION_LABELS.global}（${agentsFileDisplay()}，${action}）`
+        }
+        return `→ ${LIBRARY_LABELS[scope]}`
+      }
       const lines = drafts.map((item) => {
         const title = item.meta.title || item.body.split(/\r?\n/)[0] || item.id
         const from = sourceLabel(item.meta)
-        return `${item.id}  [${item.meta.type ?? 'project'}]  ${title}  ${destination(draftTarget(item.meta))}${from}`
+        return `${item.id}  [${typeLabel(item.meta.type ?? 'project')}]  ${title}  ${destination(item.meta)}${from}`
       })
       return {
         kind: 'success',
@@ -6609,9 +6984,9 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
           return {
             kind: 'success',
             text:
-              `已收下 ${targetId} → 全局 AGENTS.md（${result.action === 'updated' ? '更新了一章' : '新增了一章'}）` +
+              `已收下 ${targetId} → ${INSTRUCTION_LABELS.global}（${agentsFileDisplay()}，${result.action === 'updated' ? '更新了一章' : '新增了一章'}）` +
               // 常驻草稿取代的旧记忆（第十一轮）
-              `${result.replaced ? `，删除了旧记忆 ${result.replaced}（旧版在历史里）` : ''}` +
+              `${result.replaced ? `，删除了旧记忆 ${result.replaced}（${LIBRARY_LABELS[result.replacedScope] ?? '记忆'}里的，旧版在历史里）` : ''}` +
               `${result.replacedMissing ? `；要取代的旧记忆 ${result.replacedMissing} 已不存在，只写了章节` : ''}` +
               `${result.replaceFailed ? `；旧记忆 ${result.replaceFailed} 没能删除，请手动删除` : ''}`,
           }
@@ -6619,9 +6994,9 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
         return {
           kind: 'success',
           text:
-            `已收下 ${targetId} → ${result.scope === 'global' ? '所有项目（按需）库' : '本工作区记忆库'} ${result.file}` +
+            `已收下 ${targetId} → ${LIBRARY_LABELS[result.scope] ?? LIBRARY_LABELS.project} ${result.file}` +
             `${result.replaced ? `，取代 ${result.replaced}（旧版在历史里）` : ''}` +
-            `（向量 ${result.vectorMode}, ${result.vectorCount} 条）`,
+            `（向量 ${result.vectorMode}${Number.isFinite(result.vectorCount) ? `，${result.vectorCount} 条` : ''}）`,
         }
       }
       const result = rejectPending(memoryDir, targetId)
@@ -6638,8 +7013,8 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
       return {
         kind: 'success',
         text: [
-          `抽取完成：候选 ${result.candidates} 条 → 入队 ${result.queued} 条（其中 ${result.unverified} 条声称是用户说的、` +
-            `但证据没核实到，以「未核实」入队），去重丢弃 ${result.deduped} 条` +
+          `抽取完成：候选 ${result.candidates} 条 → 入队 ${result.queued} 条（其中 ${result.unverified} 条说是你的原话、` +
+            `但对话里没核对上，以「说是你的原话 · 没核对上」入队），去重丢弃 ${result.deduped} 条` +
             // 「不是记忆」的三类（流程 / 仓库规则 / 文档）跳过不入队；只在有时才说，免得每次多一句
             `${result.routed > 0 ? `，${result.routed} 条不是记忆（流程 / 仓库规则 / 文档）已跳过` : ''}。`,
           result.queued > 0 ? '用 /memory pending 查看，/memory accept <id> 收下。' : '',
@@ -6658,17 +7033,19 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
      */
     if (sub === 'forget' || sub === 'delete') {
       const targetId = argv[1]
-      if (!targetId) return { kind: 'error', text: `用法：/memory ${sub} <id> [project|global]（用 /memory list 查 id）` }
+      if (!targetId) {
+        return { kind: 'error', text: `用法：/memory ${sub} <id> [project|global]（project = 项目记忆，global = 通用记忆；用 /memory list 查 id）` }
+      }
       const wantedScope = argv[2] === 'project' || argv[2] === 'global' ? argv[2] : ''
-      const libraries = librariesFor(memoryDir).filter((library) => !wantedScope || library.scope === wantedScope)
+      const searched = libraries.filter((library) => !wantedScope || library.scope === wantedScope)
       // 先精确匹配，再按前缀匹配，方便少打几个字符
-      const exact = libraries.flatMap((library) =>
+      const exact = searched.flatMap((library) =>
         listMemories(library.dir).filter((item) => item.id === targetId).map((item) => ({ library, item })),
       )
       const byPrefix =
         exact.length > 0
           ? []
-          : libraries.flatMap((library) =>
+          : searched.flatMap((library) =>
               listMemories(library.dir).filter((item) => item.id.startsWith(targetId)).map((item) => ({ library, item })),
             )
       const matches = exact.length > 0 ? exact : byPrefix
@@ -6677,8 +7054,8 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
         return {
           kind: 'error',
           text:
-            `「${targetId}」匹配到 ${matches.length} 条，请写完整 id，同名时在后面加 project 或 global：` +
-            matches.map(({ library, item }) => `${item.id} [${library.scope}]`).join(', '),
+            `「${targetId}」匹配到 ${matches.length} 条，请写完整 id，同名时在后面加 project（项目记忆）或 global（通用记忆）：` +
+            matches.map(({ library, item }) => `${item.id}（${LIBRARY_LABELS[library.scope]}，${library.scope}）`).join('、'),
         }
       }
       const { library, item: target } = matches[0]
@@ -6688,7 +7065,9 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
       const built = await rebuildVectors(library.dir)
       return {
         kind: 'success',
-        text: `已删除 ${target.id}（${library.scope === 'global' ? '所有项目按需库' : '本工作区'}；历史留档可回退；向量 ${built.mode}, ${built.indexed} 条）`,
+        text:
+          `已删除 ${target.id}（${LIBRARY_LABELS[library.scope]}；历史留档可回退；` +
+          `向量 ${built.mode}${Number.isFinite(built.indexed) ? `，${built.indexed} 条` : ''}）`,
       }
     }
 

@@ -259,6 +259,8 @@ DSH 只补全命令名、没有参数级补全，所以无参子命令各注册�
 
 ### 右侧栏记忆面板
 
+> 本节描述的旧面板设计已被 2026-11-15 重设计取代，见 [PANEL.md](PANEL.md) 与 `preview/panel.html`（交互与接口以代码为准）。
+
 `sidebar.right.pane.tab`（keyed、会话级）注册面板主体，tab 类型由
 `ctx.sidebarRightTabs.register()` 声明。
 
@@ -578,6 +580,8 @@ skill 与 README 同理：插件只负责「记忆」这一个归宿，其余三
 
 ## 面板与全局 AGENTS.md
 
+> 本节描述的旧面板设计已被 2026-11-15 重设计取代，见 [PANEL.md](PANEL.md) 与 `preview/panel.html`（交互与接口以代码为准）。
+
 面板可以把一条记忆提升为全局 AGENTS.md 的一章，也可以直接打开、编辑 AGENTS.md。这与 `memory_remember` 的 `load: always` 写的是同一个文件。
 
 ### 搬到全局：`POST /promote`
@@ -739,6 +743,8 @@ skill 与 README 同理：插件只负责「记忆」这一个归宿，其余三
 剩下的按需写入，错了的代价是多一行索引、一次召回；人在面板里能看到证据原文，随时删除，删除前留历史可回退。
 
 ## 面板里的两个页签：记忆库 / 全局 AGENTS.md
+
+> 本节描述的旧面板设计已被 2026-11-15 重设计取代，见 [PANEL.md](PANEL.md) 与 `preview/panel.html`（交互与接口以代码为准）。
 
 面板顶部有「记忆库 | AGENTS.md」切换：
 

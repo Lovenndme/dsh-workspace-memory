@@ -1,0 +1,90 @@
+// query: w=960
+// 快捷键：A / D 只作用于焦点所在的草稿卡、按住不放不连发；输入法组字中的 Esc 不当快捷键（章节编辑器、搜索框、专注模式）。
+async () => {
+  const w = (ms) => new Promise((r) => setTimeout(r, ms))
+  const $ = (s) => document.querySelector(s)
+  const $$ = (s) => Array.from(document.querySelectorAll(s))
+  const out = []
+  const check = (label, cond) => out.push((cond ? 'PASS ' : 'FAIL ') + label)
+  const input = (el, value) => {
+    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  const key = (el, k, o) => el.dispatchEvent(new KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true, cancelable: true }, o || {})))
+  const ime = { keyCode: 229, isComposing: true }
+  const posts = (p) => window.__harness.posts.filter((x) => x.path === p)
+  const tab = (i) => $$('.wsm-tab')[i].click()
+
+  // —— A / D
+  tab(1)
+  await w(200)
+  const n0 = $$('.wsm-draft').length
+  const navTab = $$('.wsm-tab')[1]
+  navTab.focus()
+  key(navTab, 'a')
+  await w(400)
+  check('A with focus on a nav tab accepts nothing', posts('/accept').length === 0)
+  $('.wsm-panel').focus()
+  key($('.wsm-panel'), 'a')
+  key($('.wsm-panel'), 'd')
+  await w(400)
+  check('A / D with focus on the panel background do nothing', posts('/accept').length === 0 && !$('dialog[open]'))
+  $$('.wsm-draft')[0].focus()
+  key(document.activeElement, 'a')
+  for (let i = 0; i < 25; i += 1) {
+    key(document.activeElement || document.body, 'a', { repeat: true })
+    await w(30)
+  }
+  await w(900)
+  check('holding A on a focused card accepts exactly one draft', posts('/accept').length === 1 && $$('.wsm-draft').length === n0 - 1)
+  $$('.wsm-draft')[0].focus()
+  key(document.activeElement, 'd')
+  await w(150)
+  check('D on a focused card asks before discarding', /丢弃这条草稿/.test($('dialog[open]')?.textContent || '') && posts('/reject').length === 0)
+  $('dialog[open] .wsm-dialog-foot .wsm-btn').click()
+  await w(150)
+
+  // —— 输入法组字中的 Esc
+  tab(2)
+  await w(250)
+  $$('.wsm-chap')[0].querySelector('.wsm-chap-actions .wsm-btn').click()
+  await w(150)
+  const ta = $('.wsm-chap-edit textarea')
+  ta.focus()
+  key(ta, 'Escape', ime)
+  await w(120)
+  check('IME Esc keeps a clean chapter editor open', !!$('.wsm-chap-edit'))
+  input(ta, ta.value + '改')
+  await w(50)
+  key(ta, 'Escape', ime)
+  await w(120)
+  check('IME Esc in a dirty chapter editor asks nothing', !$('dialog[open]') && !!$('.wsm-chap-edit'))
+  key(ta, 'Escape')
+  await w(120)
+  check('plain Esc in a dirty chapter editor asks to discard', /放弃修改/.test($('dialog[open] .wsm-dialog-title')?.textContent || ''))
+  $$('dialog[open] .wsm-dialog-foot .wsm-btn')[1].click()
+  await w(150)
+  tab(3)
+  await w(250)
+  const search = $('[data-search]')
+  search.focus()
+  input(search, 'pnpm')
+  await w(80)
+  key(search, 'Escape', ime)
+  await w(80)
+  check('IME Esc keeps the search text', $('[data-search]').value === 'pnpm')
+  key($('[data-search]'), 'Escape')
+  await w(80)
+  check('plain Esc clears the search', $('[data-search]').value === '')
+  $$('.wsm-head-actions .wsm-iconbtn')[1].click()
+  await w(120)
+  $('.wsm-panel').focus()
+  key($('.wsm-panel'), 'Escape', ime)
+  await w(100)
+  check('IME Esc does not leave focus mode', !!$('.wsm-panel[data-focus]'))
+  key($('.wsm-panel'), 'Escape')
+  await w(100)
+  check('plain Esc leaves focus mode', !$('.wsm-panel[data-focus]'))
+  return out.join('\n')
+}

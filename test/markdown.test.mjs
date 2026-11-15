@@ -1,7 +1,7 @@
 /**
  * Markdown 渲染与标签校验的安全测试。
  *
- * 为什么必须测：面板把用户可编辑的正文渲染成 HTML（预览页、编辑器高亮层）。
+ * 为什么必须测：面板把正文渲染成 HTML（记忆的预览、待确认卡片、全局指令各章、只读的项目指令，含裸网址自动成链接）。
  * 这类代码只靠截图看不出来问题——必须逐条验证恶意输入不会变成可执行内容。
  *
  * 做法：给 client.js 注入一个收集钩子，把 factory 内部的纯函数拿出来测。
@@ -52,7 +52,7 @@ if (!captured) {
   process.exit(1)
 }
 
-const { escapeHTML, safeLink, inlineMarkdown, renderMarkdown, normalizeTag, validateDraft } = captured
+const { escapeHTML, safeLink, autoLink, inlineMarkdown, renderMarkdown, validateTag, validateDraft, normalizeLimits } = captured
 
 console.log('== HTML 转义 ==')
 {
@@ -128,27 +128,57 @@ console.log('\n== 块级 Markdown 安全与结构 ==')
   check('空输入返回空串', empty === '', JSON.stringify(empty))
 }
 
-console.log('\n== 标签规范化（与服务端规则一致）==')
+console.log('\n== 裸网址自动成链接（预览的渲染器）：仍过白名单、不产出可执行 HTML ==')
 {
-  check('去空白', normalizeTag('  a  ').tag === 'a')
-  check('拒绝空', normalizeTag('   ').ok === false)
-  check('拒绝英文逗号', normalizeTag('a,b').ok === false)
-  check('拒绝右方括号', normalizeTag('a]b').ok === false)
-  check('拒绝超长', normalizeTag('x'.repeat(41)).ok === false)
-  check('允许中文', normalizeTag('发布').ok === true)
+  const out1 = renderMarkdown('文档在 https://example.com/docs?a=1&b=2 里')
+  check('裸 https 网址变成链接', out1.includes('<a href="https://example.com/docs?a=1&amp;b=2"') && out1.includes('rel="noopener noreferrer"'), out1)
+  check('中文标点不并进网址', renderMarkdown('见 https://example.com，然后').includes('href="https://example.com/"'))
+  check('javascript: 不会被自动识别成链接', !renderMarkdown('javascript:alert(1)').includes('<a '))
+  // 在原文上识别网址：转义后的 &gt; &quot; &#39; 与句末标点都不能进 href
+  const hrefOf = (html) => {
+    const m = /<a href="([^"]*)"/.exec(html)
+    return m ? m[1].replace(/&amp;/g, '&') : null
+  }
+  check('<网址>：尖括号不进 href', hrefOf(renderMarkdown('<https://github.com/x>')) === 'https://github.com/x', renderMarkdown('<https://github.com/x>'))
+  check('双引号包着的网址：引号不进 href', hrefOf(renderMarkdown('见 "https://example.com/a" 这里')) === 'https://example.com/a')
+  check('单引号包着的网址：引号不进 href', hrefOf(renderMarkdown("at 'https://example.com/a' ok")) === 'https://example.com/a')
+  check('句末句号不进 href，留在链接外面', hrefOf(renderMarkdown('See https://example.com/a.')) === 'https://example.com/a' && renderMarkdown('See https://example.com/a.').includes('</a>.'))
+  check('句末的 , ; : ! ? 都不进 href', ['，', ',', ';', ':', '!', '?'].every((p) => hrefOf(renderMarkdown('https://example.com/a' + p)) === 'https://example.com/a'))
+  check('括号包着的网址：右括号不进 href', hrefOf(renderMarkdown('(https://example.com/a)')) === 'https://example.com/a')
+  check('网址里成对的括号保留（维基式链接）', hrefOf(renderMarkdown('https://en.wikipedia.org/wiki/Foo_(bar)')) === 'https://en.wikipedia.org/wiki/Foo_(bar)')
+  const out2 = autoLink('https://x.example/"onmouseover=alert(1)')
+  check('网址后紧跟的引号不进属性：href 正确、引号在链接外面被转义', hrefOf(out2) === 'https://x.example/' && out2.includes('</a>&quot;onmouseover'), out2)
+  check('autoLink 转义网址前后的文字', autoLink('<b>https://a.example</b>').startsWith('&lt;b&gt;<a href="https://a.example/"'))
+  check('只有协议头的不算网址', !renderMarkdown('https:// 和 http://').includes('<a '))
+  const out3 = inlineMarkdown('[https://a.example](https://b.example)')
+  check('链接文字里的网址不再套一层 <a>', (out3.match(/<a /g) || []).length === 1, out3)
+  check('代码里的网址不变成链接', !renderMarkdown('`https://example.com`').includes('<a '))
+}
+
+console.log('\n== 标签校验（与服务端规则一致；上限来自宿主 limits）==')
+{
+  const limits = normalizeLimits({ maxTags: 20, maxTagChars: 40 })
+  check('去空白后合法', validateTag('  a  ', [], limits) === '')
+  check('拒绝空', validateTag('   ', [], limits) !== '')
+  check('拒绝英文逗号', validateTag('a,b', [], limits) !== '')
+  check('拒绝右方括号', validateTag('a]b', [], limits) !== '')
+  check('拒绝超长', validateTag('x'.repeat(41), [], limits) !== '')
+  check('拒绝重复', validateTag('a', ['a'], limits) !== '')
+  check('允许中文', validateTag('发布', [], limits) === '')
 }
 
 console.log('\n== 字段校验（与服务端对齐的部分）==')
 {
+  const limits = normalizeLimits({ maxTitleChars: 200, maxDescriptionChars: 120, maxBodyChars: 20000, maxTags: 20, maxTagChars: 40 })
   const base = { title: 't', description: '', type: 'project', scope: 'project', tags: [], slug: 'a-b', body: 'b' }
-  check('合法草稿无错误', Object.keys(validateDraft(base)).length === 0, JSON.stringify(validateDraft(base)))
-  check('空标题报错', Boolean(validateDraft({ ...base, title: '  ' }).title))
-  check('空正文报错', Boolean(validateDraft({ ...base, body: '' }).body))
-  check('非法 slug 报错', Boolean(validateDraft({ ...base, slug: '中文' }).slug))
-  check('超长摘要报错', Boolean(validateDraft({ ...base, description: 'x'.repeat(121) }).description))
-  check('非法 scope 报错', Boolean(validateDraft({ ...base, scope: 'wild' }).scope))
-  check('标签超 20 报错', Boolean(validateDraft({ ...base, tags: Array.from({ length: 21 }, (_, i) => `t${i}`) }).tags))
-  check('标签含逗号报错', Boolean(validateDraft({ ...base, tags: ['a,b'] }).tags))
+  check('合法草稿无错误', Object.keys(validateDraft(base, limits, base)).length === 0, JSON.stringify(validateDraft(base, limits, base)))
+  check('空标题报错', Boolean(validateDraft({ ...base, title: '  ' }, limits, base).title))
+  check('空正文报错', Boolean(validateDraft({ ...base, body: '' }, limits, base).body))
+  check('改成非法 slug 报错', Boolean(validateDraft({ ...base, slug: '中文' }, limits, base).slug))
+  check('超长摘要报错', Boolean(validateDraft({ ...base, description: 'x'.repeat(121) }, limits, base).description))
+  check('非法 scope 报错', Boolean(validateDraft({ ...base, scope: 'wild' }, limits, base).scope))
+  check('标签超 20 报错', Boolean(validateDraft({ ...base, tags: Array.from({ length: 21 }, (_, i) => `t${i}`) }, limits, base).tags))
+  check('标签含逗号报错', Boolean(validateDraft({ ...base, tags: ['a,b'] }, limits, base).tags))
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)

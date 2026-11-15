@@ -131,7 +131,8 @@ console.log('\n== 保护 1：同名不重复追加 ==')
   }
 }
 
-console.log('\n== 保护 2：非跨项目记忆不允许写 ==')
+// 2026-11-15 用户拍板：项目记忆可以一步升为全局指令，不再返回 scope-not-global（原「保护 2：非跨项目记忆不允许写」作废）
+console.log('\n== 项目记忆也能一步写入（不再要求先换库）==')
 {
   const env = makeEnv(BASE_AGENTS)
   try {
@@ -144,9 +145,9 @@ console.log('\n== 保护 2：非跨项目记忆不允许写 ==')
       body: '内容。',
     })
     const result = mod.promoteToAgents(env.memoryDir, 'e')
-    check('被拒绝', result.ok === false && result.reason === 'scope-not-global', JSON.stringify(result))
-    check('AGENTS.md 未被改动', readFileSync(env.agentsFile, 'utf8') === BASE_AGENTS)
-    check('记忆仍保留', existsSync(path.join(env.memoryDir, 'e.md')))
+    check('写入成功，fromScope 为 project', result.ok === true && result.fromScope === 'project' && result.memoryRemoved === true && !('removeError' in result), JSON.stringify(result))
+    check('AGENTS.md 追加了这一章', readFileSync(env.agentsFile, 'utf8').includes('仅本项目'))
+    check('记忆移出项目库，历史留了一份', !existsSync(path.join(env.memoryDir, 'e.md')) && mod.listHistory(env.memoryDir, 'e').length === 1)
   } finally {
     env.cleanup()
     mod.configure(undefined)

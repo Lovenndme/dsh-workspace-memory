@@ -94,7 +94,7 @@ section('N1 自动抽取：核对不过的不丢，以「未核实」入队')
     c.state.route = { provider: 'p', model: 'm' }
     c.state.events.push(userEvent('以后每次改完插件都要先跑测试再提交，别再忘了。'.repeat(12)))
     const cmd = await c.command('memory', 'extract')
-    check('/memory extract 的文案说「以未核实入队」，不再说「丢弃」', cmd.kind === 'success' && /其中 1 条/.test(cmd.text) && /以「未核实」入队/.test(cmd.text) && !/证据未核实丢弃/.test(cmd.text), JSON.stringify(cmd))
+    check('/memory extract 的文案说「以没核对上的身份入队」，不再说「丢弃」', cmd.kind === 'success' && /其中 1 条/.test(cmd.text) && /以「说是你的原话 · 没核对上」入队/.test(cmd.text) && !/证据未核实丢弃/.test(cmd.text), JSON.stringify(cmd))
   } finally {
     c.cleanup()
   }
@@ -158,12 +158,13 @@ section('N4 收尾：/memory pending 的来源标签与面板同一套规则')
     mod.writePending(h.memoryDir, { id: 'dr_none', title: '没有来源的', body: 'x' })
     const out = await h.command('memory', 'pending')
     const line = (id) => out.text.split('\n').find((l) => l.startsWith(id)) ?? ''
-    check('source: user 且 evidenceVerified: true →「用户原话」', /用户原话$/.test(line('dr_user_ok')), line('dr_user_ok'))
-    check('source: user 但 evidenceVerified: false →「未核实」，不说成用户原话', /未核实$/.test(line('dr_user_no')) && !line('dr_user_no').includes('用户原话'), line('dr_user_no'))
-    check('source: user、没有该字段的旧草稿 →「未核实」', /未核实$/.test(line('dr_user_old')), line('dr_user_old'))
-    check('source: agent → 原来的「模型得出」', /模型得出$/.test(line('dr_agent')), line('dr_agent'))
-    check('没有来源 → 不标', !/用户原话|未核实|模型得出/.test(line('dr_none')), line('dr_none'))
-    check('sourceLabel 只认布尔真或字符串 true（手写的 yes 不算核实）', mod.sourceLabel({ source: 'user', evidenceVerified: 'yes' }) === '  未核实' && mod.sourceLabel({ source: 'user', evidenceVerified: 'true' }) === '  用户原话')
+    // 2026-11-15 起用面板的叫法：你的原话 · 已核对 / 说是你的原话 · 没核对上 / 你的原话 · 旧条目未核对 / Agent 总结
+    check('source: user 且 evidenceVerified: true →「你的原话 · 已核对」', /你的原话 · 已核对$/.test(line('dr_user_ok')), line('dr_user_ok'))
+    check('source: user 但 evidenceVerified: false →「说是你的原话 · 没核对上」，不说成已核对', /说是你的原话 · 没核对上$/.test(line('dr_user_no')) && !line('dr_user_no').includes('已核对'), line('dr_user_no'))
+    check('source: user、没有该字段的旧草稿 →「你的原话 · 旧条目未核对」', /你的原话 · 旧条目未核对$/.test(line('dr_user_old')), line('dr_user_old'))
+    check('source: agent →「Agent 总结」', /Agent 总结$/.test(line('dr_agent')), line('dr_agent'))
+    check('没有来源 → 不标', !/你的原话|Agent 总结/.test(line('dr_none')), line('dr_none'))
+    check('sourceLabel 只认布尔真或字符串 true（手写的 yes 不算核实）', mod.sourceLabel({ source: 'user', evidenceVerified: 'yes' }) === '  你的原话 · 旧条目未核对' && mod.sourceLabel({ source: 'user', evidenceVerified: 'true' }) === '  你的原话 · 已核对')
   } finally {
     h.cleanup()
   }

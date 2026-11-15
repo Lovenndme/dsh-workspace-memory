@@ -1,0 +1,665 @@
+{
+  "_about": "渲染脚手架 fixture：内容全部虚构（来自 panel-sample-data.json 与预览补充条目），形状照 /list、/agents、/agents/sections、/project-agents 的真实响应，含 2026-11-15 接口约定的新字段。",
+  "now": "2026-11-14T03:00:00.000Z",
+  "list": {
+    "ok": true,
+    "root": "C:\\Users\\demo\\.dsh\\projects\\--D-work-shop-frontend--\\memory",
+    "globalRoot": "C:\\Users\\demo\\.dsh\\dsh-workspace-memory\\global\\memory",
+    "memories": [
+      {
+        "id": "docker-vite-hmr-polling",
+        "name": "docker-vite-hmr-polling",
+        "title": "容器里跑 Vite 时热更新不生效，要开文件轮询",
+        "description": "Docker 挂载卷收不到文件变更事件，vite.config.ts 里设 server.watch.usePolling",
+        "type": "pitfall",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "agent",
+        "evidence": "",
+        "status": "confirmed",
+        "tags": [
+          "vite",
+          "docker",
+          "hmr"
+        ],
+        "paths": [
+          "vite.config.ts",
+          "docker-compose.yml"
+        ],
+        "hits": 6,
+        "lastHit": "2026-11-14T02:15:33.402Z",
+        "created": "2026-11-04T07:12:09.551Z",
+        "modified": "2026-11-12T08:41:05.120Z",
+        "body": "在 docker-compose 里跑 `vite dev` 时，宿主机改了文件页面却不刷新：挂载卷不会把文件变更事件传进容器。\n\n修法：`vite.config.ts` 里设 `server.watch.usePolling: true`，间隔 300ms 足够。\n\nWhy: 已验证过两次，换成轮询后改动 1 秒内生效。\nHow to apply: 只在容器里开发时需要；本机直接跑 `vite dev` 时不要开，会白白多占 CPU。失效条件：改用原生 Linux 文件系统挂载后可以去掉。"
+      },
+      {
+        "id": "orders-schema-freeze",
+        "name": "orders-schema-freeze",
+        "title": "orders 表结构冻结到 2026-11-30",
+        "description": "对账服务上线前不改 orders 表结构，新字段先放 order_ext 扩展表",
+        "type": "project",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "user",
+        "evidence": "月底前别动 orders 表结构，对账服务还没上线，新字段先放扩展表",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "database",
+          "migration"
+        ],
+        "paths": [
+          "db/migrations/"
+        ],
+        "hits": 3,
+        "lastHit": "2026-11-13T09:02:47.881Z",
+        "created": "2026-11-10T06:20:11.004Z",
+        "modified": "2026-11-10T06:20:11.004Z",
+        "body": "2026-11-30 之前不对 `orders` 表做任何结构变更（加列、改类型、加索引都算）。需要的新字段先放进 `order_ext` 扩展表，用 `order_id` 关联。\n\nWhy: 对账服务按当前表结构做全量比对，上线前表结构一变就要重跑基线。\nHow to apply: 写迁移脚本或改 ORM 模型前先看目标表；碰到 `orders` 就改走扩展表，并在 PR 描述里注明。12 月起这条失效，需要时再确认。"
+      },
+      {
+        "id": "checkout-v2-feature-flag",
+        "name": "checkout-v2-feature-flag",
+        "title": "新结账流程藏在 checkout_v2 开关后，年底前线上默认关闭",
+        "description": "checkout_v2 默认 false；只在预发环境与内部测试账号打开",
+        "type": "project",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "user",
+        "evidence": "v2 结账先藏在开关后面，年底前线上默认关",
+        "evidenceVerified": false,
+        "status": "confirmed",
+        "tags": [
+          "feature-flag",
+          "checkout"
+        ],
+        "paths": [
+          "src/features/checkout/"
+        ],
+        "hits": 1,
+        "lastHit": "2026-11-11T07:30:12.090Z",
+        "created": "2026-11-11T03:12:40.556Z",
+        "modified": "2026-11-11T03:12:40.556Z",
+        "body": "新结账流程的所有入口都要先判断 `checkout_v2` 开关，开关默认关闭；只在预发环境和内部测试账号打开。\n\nWhy: 支付回调还没在生产环境压测过，年底前不对外。\nHow to apply: 新增结账相关页面或接口时默认走旧流程，开关打开才走新流程；不要删旧流程代码。"
+      },
+      {
+        "id": "e2e-chromium-only",
+        "name": "e2e-chromium-only",
+        "title": "本项目本地跑 E2E 只跑 chromium",
+        "description": "本地跑 Playwright 加 --project=chromium，全浏览器矩阵交给 CI",
+        "type": "feedback",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "user",
+        "evidence": "本地别跑全浏览器了，太慢，只跑 chromium 就行",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "e2e",
+          "playwright"
+        ],
+        "paths": [
+          "playwright.config.ts"
+        ],
+        "hits": 4,
+        "lastHit": "2026-11-09T11:46:20.317Z",
+        "created": "2026-11-08T02:05:51.663Z",
+        "modified": "2026-11-08T02:05:51.663Z",
+        "body": "本地验证时 Playwright 只跑 chromium：`pnpm exec playwright test --project=chromium`。\n\nWhy: 全浏览器矩阵本地要十几分钟，用户明确说过太慢；CI 会跑完整矩阵。\nHow to apply: 改完前端交互后的本地自测用这条命令；只有排查某个浏览器特有的问题时才单独跑那个浏览器。"
+      },
+      {
+        "id": "staging-grafana-folder",
+        "name": "staging-grafana-folder",
+        "title": "预发环境的监控面板在 Grafana「shop-staging」文件夹",
+        "description": "接口延迟、错误率、前端 Web Vitals 三块面板都在这里",
+        "type": "reference",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "user",
+        "evidence": "预发的监控都在 Grafana 的 shop-staging 文件夹里",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "monitoring",
+          "staging"
+        ],
+        "paths": [],
+        "hits": 2,
+        "lastHit": "2026-11-07T08:20:03.775Z",
+        "created": "2026-11-05T09:33:28.140Z",
+        "modified": "2026-11-05T09:33:28.140Z",
+        "body": "预发环境监控：https://grafana.example.internal/dashboards/f/shop-staging\n\n- 「API 延迟」：按接口看 P95 / P99\n- 「错误率」：5xx 与前端上报的 JS 错误\n- 「Web Vitals」：LCP、INP、CLS 的日趋势\n\nHow to apply: 排查预发环境的性能或报错时先看这里，再去翻日志。"
+      },
+      {
+        "id": "local-mock-server-port",
+        "name": "local-mock-server-port",
+        "title": "本地 Mock 服务跑在 4010 端口",
+        "description": "pnpm mock 启动，接口定义在 mocks/openapi.yaml",
+        "type": "reference",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "agent",
+        "evidence": "",
+        "status": "confirmed",
+        "tags": [
+          "mock",
+          "local-dev"
+        ],
+        "paths": [
+          "mocks/openapi.yaml"
+        ],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-11-03T05:48:16.902Z",
+        "modified": "2026-11-03T05:48:16.902Z",
+        "body": "本地联调用的 Mock 服务：`pnpm mock` 启动，监听 `http://localhost:4010`，接口定义在 `mocks/openapi.yaml`。\n\nHow to apply: 前端本地开发时把 `VITE_API_BASE` 指向它；后端接口变更后先同步 `openapi.yaml`，Mock 才会跟上。"
+      },
+      {
+        "id": "reply-language-zh",
+        "name": "reply-language-zh",
+        "title": "回复用简体中文",
+        "description": "用户要求所有回复用简体中文",
+        "type": "user",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "user",
+        "evidence": "以后都用中文回答我",
+        "status": "confirmed",
+        "tags": [
+          "language"
+        ],
+        "paths": [],
+        "hits": 9,
+        "lastHit": "2026-10-30T13:07:44.218Z",
+        "created": "2026-10-21T02:11:39.480Z",
+        "modified": "2026-10-21T02:11:39.480Z",
+        "body": "用户要求所有回复都用简体中文，包括解释、总结和提交说明。\n\nWhy: 用户的工作语言是中文。\nHow to apply: 除非用户在当前对话里换了语言，否则一律用简体中文回答。"
+      },
+      {
+        "id": "ci-frozen-lockfile",
+        "name": "ci-frozen-lockfile",
+        "title": "CI 用 --frozen-lockfile：改依赖必须同时提交 lockfile",
+        "description": "只改 package.json 不更新 pnpm-lock.yaml，CI 安装依赖那一步会直接失败",
+        "type": "pitfall",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": true,
+        "source": null,
+        "evidence": "",
+        "status": "confirmed",
+        "tags": [
+          "pnpm",
+          "ci"
+        ],
+        "paths": [
+          "pnpm-lock.yaml",
+          ".github/workflows/ci.yml"
+        ],
+        "confidence": 0.85,
+        "hits": 1,
+        "lastHit": "2026-10-15T06:52:30.611Z",
+        "created": "2026-10-12T10:27:58.335Z",
+        "modified": "2026-10-12T10:27:58.335Z",
+        "body": "CI 里执行 `pnpm install --frozen-lockfile`：lockfile 与 package.json 不一致时直接报错退出。\n\nHow to apply: 改依赖后在本地跑一次 `pnpm install`，把更新后的 `pnpm-lock.yaml` 一起提交。"
+      },
+      {
+        "id": "git-crlf-shell-scripts",
+        "name": "git-crlf-shell-scripts",
+        "title": "Windows 检出的 .sh 带 CRLF，容器里执行报 bad interpreter",
+        "description": "core.autocrlf 把脚本换成了 CRLF；用 .gitattributes 固定 *.sh eol=lf",
+        "type": "pitfall",
+        "scope": "global",
+        "load": "on-demand",
+        "promotable": true,
+        "source": "agent",
+        "evidence": "",
+        "status": "confirmed",
+        "tags": [
+          "git",
+          "windows",
+          "docker"
+        ],
+        "paths": [
+          ".gitattributes"
+        ],
+        "hits": 2,
+        "lastHit": "2026-11-12T14:30:51.006Z",
+        "created": "2026-11-09T03:41:17.229Z",
+        "modified": "2026-11-09T03:41:17.229Z",
+        "body": "在 Windows 上检出仓库后，`*.sh` 被 `core.autocrlf=true` 换成 CRLF，复制进 Linux 容器执行时报 `/bin/bash^M: bad interpreter`。\n\n修法：仓库里加 `.gitattributes`，写一行 `*.sh text eol=lf`，然后执行 `git add --renormalize .`。\n\nWhy: 已在两个仓库里复现并验证。\nHow to apply: 新建带 shell 脚本的仓库，或在 Windows 上遇到容器内脚本莫名报错时，先查行尾。失效条件：全员关闭 autocrlf 的仓库不需要。"
+      },
+      {
+        "id": "pnpm-migration-deadline",
+        "name": "pnpm-migration-deadline",
+        "title": "所有前端仓库在 2026-12-31 前从 npm 迁到 pnpm",
+        "description": "新仓库直接用 pnpm；老仓库迁移时连同 CI 缓存配置一起改",
+        "type": "project",
+        "scope": "global",
+        "load": "on-demand",
+        "promotable": true,
+        "source": "user",
+        "evidence": "今年年底前所有前端仓库都换成 pnpm",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "pnpm",
+          "tooling"
+        ],
+        "paths": [],
+        "hits": 1,
+        "lastHit": "2026-11-10T01:18:09.442Z",
+        "created": "2026-11-06T08:02:33.917Z",
+        "modified": "2026-11-06T08:02:33.917Z",
+        "body": "2026-12-31 前，所有前端仓库的包管理器从 npm 换成 pnpm。新建仓库直接用 pnpm。\n\nWhy: 统一 lockfile 格式与 CI 缓存，减少「本地能装、CI 装不上」。\nHow to apply: 在任何前端仓库里看到 `package-lock.json` 时提醒一句迁移；迁移时同步改 CI 的缓存键。"
+      },
+      {
+        "id": "release-runbook-wiki",
+        "name": "release-runbook-wiki",
+        "title": "各服务的上线手册在内部 wiki「发布手册」空间",
+        "description": "每个服务一页：发布步骤、回滚步骤、值班联系方式",
+        "type": "reference",
+        "scope": "global",
+        "load": "on-demand",
+        "promotable": true,
+        "source": "user",
+        "evidence": "上线手册都在 wiki 的发布手册空间，一个服务一页",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "release",
+          "runbook"
+        ],
+        "paths": [],
+        "hits": 3,
+        "lastHit": "2026-11-08T05:44:12.301Z",
+        "created": "2026-11-02T06:15:40.288Z",
+        "modified": "2026-11-02T06:15:40.288Z",
+        "body": "上线手册：https://wiki.example.internal/spaces/release\n\n每个服务一页，包含发布步骤、回滚步骤和值班联系方式。\n\nHow to apply: 准备发布或回滚任何服务前，先打开对应页面核对步骤；手册与实际步骤不符时提醒用户更新。"
+      },
+      {
+        "id": "test-names-as-sentences",
+        "name": "test-names-as-sentences",
+        "title": "测试用例名写成完整的一句话",
+        "description": "用「应当……」句式描述行为，不用 test1、works 这类名字",
+        "type": "feedback",
+        "scope": "global",
+        "load": "on-demand",
+        "promotable": true,
+        "source": "user",
+        "evidence": "测试名写成一句话，说清楚应当发生什么",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "testing"
+        ],
+        "paths": [],
+        "hits": 5,
+        "lastHit": "2026-11-06T09:27:55.064Z",
+        "created": "2026-10-28T03:50:21.773Z",
+        "modified": "2026-10-28T03:50:21.773Z",
+        "body": "测试用例名写成一句完整的话，说清楚在什么条件下应当发生什么，例如「库存为零时应当禁用下单按钮」。\n\nWhy: 用户纠正过：失败报告里只看名字就要能知道坏了什么。\nHow to apply: 写新测试或重命名旧测试时都按这个格式。"
+      },
+      {
+        "id": "editor-vscode-vim",
+        "name": "editor-vscode-vim",
+        "title": "用户习惯 VS Code + Vim 键位",
+        "description": "给编辑器操作建议时按 VS Code 命令名与 Vim 键位来说",
+        "type": "user",
+        "scope": "global",
+        "load": "on-demand",
+        "promotable": true,
+        "source": "user",
+        "evidence": "我平时用 VS Code，开着 Vim 键位",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "editor"
+        ],
+        "paths": [],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-10-20T12:09:46.512Z",
+        "modified": "2026-10-20T12:09:46.512Z",
+        "body": "用户日常用 VS Code，并开启了 Vim 键位插件。\n\nHow to apply: 需要说明编辑器操作（多光标、跳转、重构快捷键）时，按 VS Code 命令面板里的名称和 Vim 键位来说。"
+      },
+      {
+        "id": "legacy-api-gateway-host",
+        "name": "legacy-api-gateway-host",
+        "title": "旧 API 网关地址是 gw-old.example.internal",
+        "description": "迁移前的联调网关；新环境统一走 api.example.internal",
+        "type": "reference",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "source": "user",
+        "evidence": "老网关是 gw-old 那个域名，迁完就不用了",
+        "evidenceVerified": true,
+        "status": "confirmed",
+        "tags": [
+          "api",
+          "gateway"
+        ],
+        "paths": [
+          ".env.example"
+        ],
+        "hits": 4,
+        "lastHit": "2026-08-28T06:11:40.000Z",
+        "created": "2026-07-15T02:30:00.000Z",
+        "modified": "2026-07-15T02:30:00.000Z",
+        "body": "迁移前的联调网关：`https://gw-old.example.internal`。\n\nHow to apply: 只有排查迁移前的旧数据时才需要；新功能一律走 `api.example.internal`。"
+      },
+      {
+        "id": "jest-snapshot-update",
+        "name": "jest-snapshot-update",
+        "title": "更新 Jest 快照用 -u，不要手改 .snap 文件",
+        "description": "手改快照容易和渲染结果对不上，CI 会报快照过期",
+        "type": "pitfall",
+        "scope": "global",
+        "load": "on-demand",
+        "promotable": true,
+        "source": "agent",
+        "evidence": "",
+        "status": "confirmed",
+        "tags": [
+          "jest",
+          "testing"
+        ],
+        "paths": [],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-09-22T08:05:00.000Z",
+        "modified": "2026-09-22T08:05:00.000Z",
+        "body": "快照不一致时，确认渲染结果是预期的之后跑 `pnpm test -u` 重新生成，不要手改 `.snap`。\n\nWhy: 手改的快照常常漏掉空白或属性顺序，CI 上会再次失败。"
+      }
+    ],
+    "pending": [
+      {
+        "id": "dr_mwkx3q9a_5b8e1f",
+        "name": "dr_mwkx3q9a_5b8e1f",
+        "title": "代码评审：先给结论再列问题",
+        "description": "评审意见第一句给结论，再按严重程度列问题",
+        "type": "feedback",
+        "scope": "global",
+        "load": "always",
+        "promotable": false,
+        "newChapter": true,
+        "source": "user",
+        "evidence": "评审的时候先告诉我能不能合，再列具体问题，别一上来就贴大段代码",
+        "evidenceVerified": true,
+        "status": "draft",
+        "tags": [
+          "code-review"
+        ],
+        "paths": [],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-11-14T01:48:22.318Z",
+        "modified": "2026-11-14T01:48:22.318Z",
+        "body": "- 评审意见第一句给结论：可以合入 / 改完再合 / 需要重新设计。\n- 然后按严重程度列问题，每条写清位置、问题和建议的改法。\n- 只在必要时贴代码，并且只贴相关的几行。",
+        "slug": "code-review-conclusion-first"
+      },
+      {
+        "id": "dr_mwkv8d2c_a3c7d2",
+        "name": "dr_mwkv8d2c_a3c7d2",
+        "title": "订单导出接口在 2026-11-27 前改成异步任务",
+        "description": "同步导出频繁超时，改成后台任务 + 下载链接",
+        "type": "project",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "newChapter": false,
+        "source": "user",
+        "evidence": "导出那个接口月底前要改成异步的，用户老是等到超时",
+        "evidenceVerified": false,
+        "status": "draft",
+        "tags": [
+          "orders",
+          "export"
+        ],
+        "paths": [
+          "src/api/orders/export.ts"
+        ],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-11-13T10:05:41.770Z",
+        "modified": "2026-11-13T10:05:41.770Z",
+        "body": "订单导出接口在 2026-11-27 前从同步下载改成异步任务：请求后返回任务 id，完成后给下载链接。\n\nWhy: 大商户导出经常超过网关 30 秒超时。\nHow to apply: 改动导出相关代码时按异步方案做，不要再加大同步接口的超时时间。",
+        "slug": "orders-export-async"
+      },
+      {
+        "id": "dr_mwkt1f7b_7e21c9",
+        "name": "dr_mwkt1f7b_7e21c9",
+        "title": "沟通与输出",
+        "description": "回复一律用简体中文；先结论后细节",
+        "type": "user",
+        "scope": "global",
+        "load": "always",
+        "promotable": false,
+        "newChapter": false,
+        "chapter": 2,
+        "chapterTitle": "沟通与输出",
+        "supersedes": "reply-language-zh",
+        "supersedesScope": "project",
+        "source": "user",
+        "evidence": "所有项目里都用中文跟我说，提交说明也用中文",
+        "evidenceVerified": true,
+        "status": "draft",
+        "tags": [],
+        "paths": [],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-11-13T06:33:12.045Z",
+        "modified": "2026-11-13T06:33:12.045Z",
+        "body": "- 回答一律用简体中文，代码注释与提交说明也用中文。\n- 先给结论，再给理由和细节；不确定的地方明说「不确定」。\n- 代码片段只贴改动的部分，不要整文件重贴。",
+        "slug": "reply-language-zh"
+      },
+      {
+        "id": "dr_mwkq6n4e_0f4b6a",
+        "name": "dr_mwkq6n4e_0f4b6a",
+        "title": "容器里跑 Vite 热更新不生效：开轮询，WSL2 下改放 Linux 文件系统",
+        "description": "挂载卷收不到变更事件；WSL2 时把仓库放进 Linux 文件系统比开轮询更省 CPU",
+        "type": "pitfall",
+        "scope": "project",
+        "load": "on-demand",
+        "promotable": false,
+        "newChapter": false,
+        "supersedes": "docker-vite-hmr-polling",
+        "source": "agent",
+        "evidence": "",
+        "status": "draft",
+        "tags": [
+          "vite",
+          "docker",
+          "hmr",
+          "wsl2"
+        ],
+        "paths": [
+          "vite.config.ts",
+          "docker-compose.yml"
+        ],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-11-12T09:17:58.230Z",
+        "modified": "2026-11-12T09:17:58.230Z",
+        "body": "在 docker-compose 里跑 `vite dev` 时，宿主机改了文件页面却不刷新：挂载卷不会把文件变更事件传进容器。\n\n修法有两种：\n- 通用：`vite.config.ts` 里设 `server.watch.usePolling: true`，间隔 300ms。\n- WSL2：把仓库放到 Linux 文件系统（`~/work/...`）下再挂载，原生事件就能传进去，不必开轮询。\n\nWhy: 两种做法都已验证；WSL2 下开轮询会让 CPU 占用明显升高。\nHow to apply: 先确认开发环境是不是 WSL2，再选做法。失效条件：改在原生 Linux 主机上开发时都不需要。",
+        "slug": "docker-vite-hmr-wsl2"
+      },
+      {
+        "id": "dr_mwkn2s7e_c19d84",
+        "name": "dr_mwkn2s7e_c19d84",
+        "title": "滚动发布时先跑迁移、再发新版本",
+        "description": "新版本依赖的列必须在发布前就存在，否则新旧实例并存期间会报错",
+        "type": "pitfall",
+        "scope": "global",
+        "load": "on-demand",
+        "promotable": false,
+        "newChapter": false,
+        "source": "agent",
+        "evidence": "",
+        "status": "draft",
+        "tags": [
+          "deploy",
+          "migration"
+        ],
+        "paths": [],
+        "hits": 0,
+        "lastHit": null,
+        "created": "2026-11-12T02:40:09.611Z",
+        "modified": "2026-11-12T02:40:09.611Z",
+        "body": "滚动发布期间新旧版本同时在线：如果新版本依赖的列由同一次发布里的迁移创建，迁移跑完之前新实例的查询会失败。\n\n做法：把迁移拆到发布之前单独执行，并保证迁移对旧版本兼容（只加列、不删列）。\n\nWhy: 在一次预发布演练里踩到过，日志里是大量「column does not exist」。\nHow to apply: 准备包含数据库变更的发布时，先确认迁移能否先于代码上线。",
+        "slug": "migrate-before-rolling-deploy"
+      }
+    ],
+    "pendingEnabled": false,
+    "agentWrites": "review",
+    "workspace": {
+      "path": "D:\\work\\shop-frontend",
+      "name": "shop-frontend"
+    },
+    "limits": {
+      "maxMemoryCount": 50,
+      "maxTitleChars": 200,
+      "maxDescriptionChars": 120,
+      "maxBodyChars": 20000,
+      "maxTags": 20,
+      "maxTagChars": 40
+    },
+    "historyDir": {
+      "project": "C:\\Users\\demo\\.dsh\\projects\\--D-work-shop-frontend--\\.memory-state\\history",
+      "global": "C:\\Users\\demo\\.dsh\\dsh-workspace-memory\\global\\.memory-state\\history"
+    }
+  },
+  "agents": {
+    "ok": true,
+    "agents": {
+      "path": "C:\\Users\\demo\\.dsh\\AGENTS.md",
+      "exists": true,
+      "bytes": 1871,
+      "sections": 8,
+      "limit": 10000,
+      "mtime": "2026-11-12T07:20:00.000Z",
+      "historyLimit": 20,
+      "historyDir": "C:\\Users\\demo\\.dsh\\.dsh-workspace-memory-history\\agents"
+    },
+    "editors": [
+      {
+        "id": "typora",
+        "name": "Typora",
+        "exe": "C:\\Users\\demo\\AppData\\Local\\Programs\\Typora\\Typora.exe"
+      },
+      {
+        "id": "vscode",
+        "name": "VS Code",
+        "exe": "C:\\Users\\demo\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code.cmd",
+        "viaShell": true
+      },
+      {
+        "id": "system",
+        "name": "系统默认",
+        "exe": ""
+      }
+    ]
+  },
+  "agentsSections": {
+    "ok": true,
+    "path": "C:\\Users\\demo\\.dsh\\AGENTS.md",
+    "bytes": 1871,
+    "preamble": "# 全局工作约定\n\n适用于所有项目的通用约定；项目级细则见各仓库自己的 AGENTS.md。",
+    "sections": [
+      {
+        "index": 0,
+        "level": 2,
+        "title": "1. 我是谁",
+        "body": "- 前端为主的全栈开发，日常用 TypeScript、Node.js 和 PostgreSQL。\n- 熟悉 React 与 Vite；对 Kubernetes 只会基本操作，涉及集群配置时请多解释一句。",
+        "bytes": 203
+      },
+      {
+        "index": 1,
+        "level": 2,
+        "title": "2. 沟通与输出",
+        "body": "- 先给结论，再给理由和细节；不确定的地方明说「不确定」。\n- 代码片段只贴改动的部分，不要整文件重贴。",
+        "bytes": 170
+      },
+      {
+        "index": 2,
+        "level": 2,
+        "title": "3. 提交与分支",
+        "body": "- 提交说明用 Conventional Commits：标题说做了什么，正文说为什么。\n- 一个提交只做一件事；纯格式化改动单独提交。\n\n### 3.1 推送前\n\n- 推送前先 rebase 到最新主干，冲突解决完再推。\n- 不要 force push 到共享分支。",
+        "bytes": 300
+      },
+      {
+        "index": 3,
+        "level": 2,
+        "title": "4. 动手前先确认",
+        "body": "- 改动会碰到三个以上文件、或要改公共接口时，先给方案，等我同意再写。\n- 只读的排查（看日志、跑只读查询）不用问，直接做。",
+        "bytes": 203
+      },
+      {
+        "index": 4,
+        "level": 2,
+        "title": "5. 测试习惯",
+        "body": "- 改完只跑与改动直接相关的测试，全量回归留到发布前。\n- 遇到不稳定的测试先修，不要加 skip 掩盖。",
+        "bytes": 158
+      },
+      {
+        "index": 5,
+        "level": 2,
+        "title": "6. 数据库迁移",
+        "body": "- 每个迁移脚本都要有对应的回滚脚本，并在本地跑一遍「迁移 → 回滚 → 再迁移」。\n- 生产库的迁移先在副本库演练，记下耗时与锁表情况。\n\n### 6.1 不可逆操作\n\n- 删列、删表、改列类型属于不可逆操作：先停止读写，观察一个发布周期，再真正删除。",
+        "bytes": 359
+      },
+      {
+        "index": 6,
+        "level": 2,
+        "title": "7. 部署与发布",
+        "body": "- 发布前核对目标环境的环境变量清单，缺一项就停。\n- 周五下午和节假日前一天不发版，紧急修复除外。",
+        "bytes": 164
+      },
+      {
+        "index": 7,
+        "level": 2,
+        "title": "8. 安全红线",
+        "body": "- 密钥和令牌只放在密钥管理服务里，不进代码、不进日志、不进提交历史。\n- `.env` 永远不入库；示例配置用 `.env.example`，值留空。",
+        "bytes": 195
+      }
+    ],
+    "limit": 10000,
+    "mtime": "2026-11-12T07:20:00.000Z",
+    "historyLimit": 20,
+    "historyDir": "C:\\Users\\demo\\.dsh\\.dsh-workspace-memory-history\\agents"
+  },
+  "projectAgents": {
+    "ok": true,
+    "workspace": {
+      "path": "D:\\work\\shop-frontend",
+      "name": "shop-frontend"
+    },
+    "root": {
+      "path": "D:\\work\\shop-frontend",
+      "name": "shop-frontend"
+    },
+    "team": {
+      "path": "D:\\work\\shop-frontend\\AGENTS.md",
+      "exists": true,
+      "bytes": 547,
+      "mtime": "2026-11-07T03:40:00.000Z",
+      "body": "# shop-frontend 协作约定\n\n这份约定进 git，所有在这个仓库里工作的人和 Agent 都要守。\n\n## 1. 技术栈\n\n- React 18 + Vite + TypeScript，包管理统一用 pnpm。\n- 全局状态用 Zustand，不要再引入 Redux。\n\n## 2. 提交前\n\n- 先跑 `pnpm lint` 和 `pnpm test`，都通过再提交。\n- 接口类型由 `mocks/openapi.yaml` 生成，不要手写。\n\n## 3. 目录约定\n\n- 页面放 `src/pages/`，可复用组件放 `src/components/`。\n- 新功能放进 `src/features/<名字>/`，对外只导出 `index.ts`。",
+      "truncated": false
+    },
+    "local": {
+      "path": "D:\\work\\shop-frontend\\AGENTS.local.md",
+      "exists": false,
+      "bytes": 0,
+      "mtime": null,
+      "body": "",
+      "truncated": false
+    }
+  }
+}

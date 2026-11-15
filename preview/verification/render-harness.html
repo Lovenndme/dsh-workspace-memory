@@ -1,345 +1,420 @@
 <!doctype html>
 <!--
-  渲染验收脚手架（开发用，不属于插件产物；交付后可删）。
+  渲染验收脚手架（开发用，不属于插件产物）。
 
-  目的是把 client.js 里**真实的** MemoryPanel 组件挂进页面，用**真实样式表**渲染，
-  再用 headless 浏览器截图——而不是只做「非渲染的 DOM 检查」。
+  把 client.js 里**真实的**面板组件挂进页面，用真实样式表渲染，再用 headless 浏览器截图对照 ../panel.html（已确认的预览）。
 
-  与 React 的差异（务必知道）：
-   · 用最小 hooks 运行时替代 React，hooks 按「组件实例路径」分槽，避免串号。
-   · 每次渲染重建子树，但**保留根容器**，这样 ResizeObserver 观察的节点不被换掉。
-   · 不做真实 diff，交互后的节点状态（滚动位置、焦点）不会保留。
-  结论：布局与样式可信；React 运行时行为（并发、批处理）不可在此验证。
+  · 宿主主题 token、宿主 tab 条外框：运行时从 ../panel.html 的 <style id="host-emulation"> 与 <style id="preview-chrome"> 取，
+    与预览完全同一份，不在这里复制。
+  · React：默认用下面的迷你运行时（createElement / Fragment / useState / useReducer / useRef / useEffect / useLayoutEffect，
+    带 key 的子节点对齐、ref 回调、受控 value、事件代理）。传 ?react=<目录 URL> 时改为加载该目录下的
+    react.development.js 与 react-dom.development.js（React 18 UMD），用真 React 校验（目录不入库）。
+  · 数据：fetch 被替换成读 ./fixture.json（虚构示例，形状照真实响应）；POST 接口在内存里模拟成功并改 fixture，
+    所以收下、丢弃、保存、删除、升级、增删章之后重读能看到变化。
+  · 现在：固定为 fixture.now（相对时间与预览一致），?now=<ISO> 可改。
+
+  URL 参数：theme=light|dark · w=<面板宽度> · view=overview|pending|instructions|memories · ins=project
+            mem=<scope:id 或 id> · flow=1 · lang=en · strict=1（配合 react=）· data=empty|error|loading|old（old = 去掉新字段，模拟旧宿主）
+            delay=<毫秒>（每个接口都延迟这么久返回，用来暴露「请求在途」的窗口）
+  脚本入口：window.__harness.unmount() 卸载面板并依次调用插件 ctx.effect 返回的清理函数（验证释放）；
+            window.__harness.posts 记录发出的每个 POST（路径 + 请求体）。检查脚本见 ./checks/。
+  完成后 document.title 以 READY 开头；出错以 ERROR 开头。需要经 http 打开（例如 node 起一个只读静态服务）。
 -->
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="utf-8">
 <title>记忆面板 · 渲染验收</title>
+<link rel="icon" href="data:,">
 <style>
-  /* 真实 DSH 里这些变量由主题注入；脚手架里补一份深色主题值 */
-  :root {
-    --dsw-alias-bg-base: #17181a;
-    --dsw-alias-bg-layer-1: #1e1f22;
-    --dsw-alias-bg-layer-2: #26272b;
-    --dsw-alias-bg-canvas: #0d0e10;
-    --dsw-alias-border-l1: #2e3035;
-    --dsw-alias-border-l2: #3a3d43;
-    --dsw-alias-label-primary: #e6e7ea;
-    --dsw-alias-label-secondary: #9a9da6;
-    --dsw-alias-brand-primary: #4a7dff;
-    --dsw-alias-state-error-primary: #f06a6a;
-    --dsw-alias-state-success-primary: #4ec9a0;
-    --dsw-alias-state-warn-primary: #e0a458;
-  }
-  html, body { margin: 0; height: 100%; background: var(--dsw-alias-bg-canvas); color: var(--dsw-alias-label-primary); }
-  #frame { margin: 0 auto; height: 100%; }
+  html, body { margin: 0; }
+  .pv-root { min-height: 100vh; }
+  .pv-stage { padding-top: 24px; }
+  .pv-frame { height: calc(100vh - 92px) !important; }
 </style>
 </head>
 <body>
-<div id="frame"><div id="mount" style="height:100%"></div></div>
+<div class="pv-root">
+  <div class="pv-stage">
+    <div class="pv-frame" id="frame">
+      <div class="pv-tabbar" aria-hidden="true">
+        <span class="pv-tab" data-active="true">记忆<span class="pv-tab-x"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.15"><path d="m4 4 8 8M12 4l-8 8"/></svg></span></span>
+        <span class="pv-tab">文件<span class="pv-tab-x"></span></span>
+        <span class="pv-tabbar-end"><span><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"><path d="M8 3v10M3 8h10"/></svg></span><span><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor"><circle cx="3.5" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="8" r="1" fill="currentColor" stroke="none"/></svg></span></span>
+      </div>
+      <div class="pv-slot" id="mount"></div>
+    </div>
+  </div>
+</div>
 <script>
-/* ------------------------------------------------------- 最小 hooks 运行时 */
-const store = new Map();       // 实例路径 → { slots: [] }
-const stack = [];              // 当前渲染的组件路径
-let instanceSeq = new Map();   // 同一父路径下同类组件的出现序号
-let effectQueue = [];
-let scheduled = false;
-let rendering = false;
-let frameCount = 0;
+'use strict'
+const params = new URLSearchParams(location.search)
+const fail = (msg) => { document.title = 'ERROR ' + msg; console.error(msg) }
+window.addEventListener('error', (e) => fail(e.message))
+window.addEventListener('unhandledrejection', (e) => fail(String(e.reason && e.reason.stack || e.reason)))
 
-function bucketOf(key) {
-  if (!store.has(key)) store.set(key, { slots: [], cursor: 0 });
-  return store.get(key);
-}
-
-function currentBucket() {
-  return bucketOf(stack.join('/') || 'root');
-}
-
-function depsEqual(a, b) {
-  if (!a || !b || a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) if (!Object.is(a[i], b[i])) return false;
-  return true;
-}
-
-function useState(initial) {
-  const bucket = currentBucket();
-  const index = bucket.cursor++;
-  if (index >= bucket.slots.length) bucket.slots.push(typeof initial === 'function' ? initial() : initial);
-  const set = (value) => {
-    const next = typeof value === 'function' ? value(bucket.slots[index]) : value;
-    if (Object.is(next, bucket.slots[index])) return;
-    bucket.slots[index] = next;
-    if (window.__DBG__ && typeof next === 'number') window.__DBG__.sets.push(next);
-    schedule();
-  };
-  return [bucket.slots[index], set];
-}
-
-function useRef(initial) {
-  const bucket = currentBucket();
-  const index = bucket.cursor++;
-  if (!bucket.slots[index]) bucket.slots[index] = { current: initial };
-  return bucket.slots[index];
-}
-
-function useMemo(factory, deps) {
-  const bucket = currentBucket();
-  const index = bucket.cursor++;
-  const slot = bucket.slots[index];
-  if (slot && depsEqual(slot.deps, deps)) return slot.value;
-  const value = factory();
-  bucket.slots[index] = { deps, value };
-  return value;
-}
-
-function useCallback(fn, deps) {
-  return useMemo(() => fn, deps);
-}
-
-function useEffect(effect, deps) {
-  const bucket = currentBucket();
-  const index = bucket.cursor++;
-  const slot = bucket.slots[index];
-  // 脚手架每帧重建节点，ref 指向的 DOM 会被换掉；因此空依赖的效果必须每帧重跑，
-  // 否则观察者会盯着已摘除的旧节点（宽度读成 0）。真实 React 不存在这个问题。
-  const alwaysRun = Array.isArray(deps) && deps.length === 0;
-  if (!alwaysRun && slot && slot.hasRun && depsEqual(slot.deps, deps)) return;
-  const previous = slot && typeof slot.cleanup === 'function' ? slot.cleanup : null;
-  const record = { deps, hasRun: true, cleanup: null };
-  bucket.slots[index] = record;
-  effectQueue.push({ previous, effect, record });
-}
-
-function schedule() {
-  if (scheduled) return;
-  scheduled = true;
-  requestAnimationFrame(() => {
-    scheduled = false;
-    renderAll();
-  });
-}
-
-/* --------------------------------------------------------------- h → DOM */
-const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) });
-
-function applyProps(element, key, value) {
-  if (key === 'key' || key === 'children') return;
-  // ref 必须真的挂上，否则组件测不到容器宽度（布局永远停在 split）
-  if (key === 'ref') {
-    if (typeof value === 'function') value(element)
-    else if (value && typeof value === 'object') value.current = element
-    return
+/* =================================================================== 迷你 React */
+const MiniReact = (() => {
+  const Fragment = Symbol('Fragment')
+  function createElement(type, props, ...children) {
+    const p = Object.assign({}, props)
+    const key = p.key != null ? String(p.key) : null
+    const ref = p.ref
+    delete p.key
+    delete p.ref
+    if (children.length) p.children = children.length === 1 ? children[0] : children
+    return { $el: true, type, key, ref, props: p }
   }
-  if (value === null || value === undefined || value === false) return;
-  if (key === 'className') { element.setAttribute('class', String(value)); return; }
-  if (key === 'htmlFor') { element.setAttribute('for', String(value)); return; }
-  if (key === 'style' && typeof value === 'object') {
-    for (const [prop, val] of Object.entries(value)) if (val !== undefined && val !== null) element.style[prop] = String(val);
-    return;
+  let current = null // 正在渲染的组件实例
+  let scheduled = false
+  const roots = []
+  const instances = new Map()
+  function schedule() { if (!scheduled) { scheduled = true; queueMicrotask(renderAll) } }
+  function slot(init) {
+    const inst = current
+    const i = inst.cursor++
+    if (i >= inst.hooks.length) inst.hooks.push(init())
+    return inst.hooks[i]
   }
-  if (key === 'dangerouslySetInnerHTML') { element.innerHTML = value.__html ?? ''; return; }
-  if (key === 'hidden') { if (value) element.setAttribute('hidden', ''); return; }
-  if (key === 'value') {
-    // <select> 的 value 必须在 option 生成后才能生效，否则会落到第一项
-    if (element.tagName === 'SELECT') {
-      element.dataset.pendingValue = String(value);
-      return;
+  const depsChanged = (a, b) => !a || !b || a.length !== b.length || a.some((x, i) => !Object.is(x, b[i]))
+  function useReducer(reducer, initial) {
+    const s = slot(() => ({ value: initial }))
+    if (!s.dispatch) s.dispatch = (action) => { const next = reducer(s.value, action); if (!Object.is(next, s.value)) { s.value = next; schedule() } }
+    return [s.value, s.dispatch]
+  }
+  function useState(initial) {
+    const s = slot(() => ({ value: typeof initial === 'function' ? initial() : initial }))
+    if (!s.set) s.set = (v) => { const next = typeof v === 'function' ? v(s.value) : v; if (!Object.is(next, s.value)) { s.value = next; schedule() } }
+    return [s.value, s.set]
+  }
+  const useRef = (initial) => slot(() => ({ current: initial }))
+  const useMemo = (fn, deps) => { const s = slot(() => ({})); if (!('value' in s) || depsChanged(s.deps, deps)) { s.value = fn(); s.deps = deps } return s.value }
+  const useCallback = (fn, deps) => useMemo(() => fn, deps)
+  function effectHook(queue) {
+    return (fn, deps) => {
+      const s = slot(() => ({ deps: undefined, cleanup: null, first: true }))
+      if (s.first || deps === undefined || depsChanged(s.deps, deps)) {
+        s.first = false
+        s.deps = deps
+        current.pending.push({ s, fn, queue })
+      }
     }
-    // 只接受字符串/数字，避免把对象塞进 value 变成 [object Object]
-    element.value = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
-    return;
   }
-  if (key === 'checked') { element.checked = Boolean(value); return; }
-  if (key.startsWith('on') && typeof value === 'function') {
-    const eventName = key.slice(2).toLowerCase();
-    // React 的 onChange 走 DOM 的 input 事件（不是 change），这里必须对齐
-    if (eventName === 'change') {
-      element.addEventListener('input', value);
-      element.addEventListener('change', value);
-    } else {
-      element.addEventListener(eventName, value);
+  const useEffect = effectHook('effect')
+  const useLayoutEffect = effectHook('layout')
+
+  /* ---- 展开：元素树 → 宿主节点树 ---- */
+  let visited
+  let effects
+  function expand(node, path, out) {
+    if (node == null || node === false || node === true) return
+    if (Array.isArray(node)) { node.forEach((c, i) => expand(c, path + '/' + (c && c.key != null ? 'k' + c.key : i), out)); return }
+    if (typeof node === 'string' || typeof node === 'number') { out.push({ type: '#text', text: String(node) }); return }
+    if (!node.$el) return
+    if (node.type === Fragment) { expand(node.props.children, path, out); return }
+    if (typeof node.type === 'function') {
+      const ipath = path + '|' + (node.type.name || 'anon') + (node.key != null ? '#' + node.key : '')
+      let inst = instances.get(ipath)
+      if (!inst) { inst = { hooks: [], pending: [] }; instances.set(ipath, inst) }
+      visited.add(ipath)
+      const prev = current
+      current = inst
+      inst.cursor = 0
+      inst.pending = []
+      let result
+      try { result = node.type(node.props) } finally { current = prev }
+      effects.push(...inst.pending)
+      expand(result, ipath, out)
+      return
     }
-    return;
+    const children = []
+    if (!node.props.dangerouslySetInnerHTML) expand(node.props.children, path + '>' + node.type, children)
+    out.push({ type: node.type, key: node.key, ref: node.ref, props: node.props, children })
   }
-  if (typeof value === 'boolean') { if (value) element.setAttribute(key, ''); return; }
-  element.setAttribute(key, String(value));
+
+  /* ---- 打补丁 ---- */
+  const SVG_NS = 'http://www.w3.org/2000/svg'
+  const EVENT = { onChange: 'input', onFocus: 'focusin', onBlur: 'focusout', onDoubleClick: 'dblclick' }
+  const ATTR = { className: 'class', htmlFor: 'for', tabIndex: 'tabindex', spellCheck: 'spellcheck', strokeWidth: 'stroke-width' }
+  function proxy(e) { const fn = this.__h && this.__h[e.type]; if (fn) { if (!e.nativeEvent) e.nativeEvent = e; fn(e) } }
+  function setProp(el, k, v, old) {
+    if (k === 'children' || k === 'dangerouslySetInnerHTML') return
+    if (k === 'style') {
+      const o = old || {}, n = v || {}
+      for (const s in o) if (!(s in n)) { if (s.startsWith('--')) el.style.removeProperty(s); else el.style[s] = '' }
+      for (const s in n) if (o[s] !== n[s]) { if (s.startsWith('--')) el.style.setProperty(s, n[s]); else el.style[s] = n[s] }
+      return
+    }
+    if (k === 'value') { const s = v == null ? '' : String(v); if (el.value !== s) el.value = s; return }
+    if (k === 'checked') { el.checked = !!v; return }
+    if (/^on[A-Z]/.test(k)) {
+      let name = EVENT[k] || k.slice(2).toLowerCase()
+      if (k === 'onChange' && !(el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) name = 'change'
+      el.__h = el.__h || {}
+      if (!(name in el.__h)) el.addEventListener(name, proxy)
+      el.__h[name] = v || null
+      return
+    }
+    const name = ATTR[k] || k
+    if (v == null || v === false) el.removeAttribute(name)
+    else el.setAttribute(name, v === true ? '' : String(v))
+  }
+  let refs = []
+  function mount(v, svg) {
+    if (v.type === '#text') { v.el = document.createTextNode(v.text); return v.el }
+    const isSvg = svg || v.type === 'svg'
+    const el = isSvg ? document.createElementNS(SVG_NS, v.type) : document.createElement(v.type)
+    v.el = el
+    for (const k in v.props) setProp(el, k, v.props[k], undefined)
+    if (v.props.dangerouslySetInnerHTML) el.innerHTML = v.props.dangerouslySetInnerHTML.__html || ''
+    else for (const c of v.children) el.appendChild(mount(c, isSvg))
+    if (v.ref) refs.push([null, v.ref, el])
+    return el
+  }
+  function patch(o, n, svg) {
+    const el = (n.el = o.el)
+    if (n.type === '#text') { if (o.text !== n.text) el.nodeValue = n.text; return }
+    const isSvg = svg || n.type === 'svg'
+    for (const k in o.props) if (!(k in n.props)) setProp(el, k, undefined, o.props[k])
+    for (const k in n.props) if (k === 'value' || o.props[k] !== n.props[k]) setProp(el, k, n.props[k], o.props[k])
+    const oh = o.props.dangerouslySetInnerHTML, nh = n.props.dangerouslySetInnerHTML
+    if (nh) { if (!oh || oh.__html !== nh.__html) el.innerHTML = nh.__html || '' }
+    else { if (oh) el.innerHTML = ''; patchChildren(el, oh ? [] : o.children, n.children, isSvg) }
+    if (o.ref !== n.ref) refs.push([o.ref, n.ref, el])
+  }
+  function setRef(ref, el) { if (typeof ref === 'function') ref(el); else if (ref && typeof ref === 'object') ref.current = el }
+  function unmountRefs(v) { if (v.ref) setRef(v.ref, null); for (const c of v.children || []) unmountRefs(c) }
+  function unmount(v) { unmountRefs(v); if (v.el && v.el.parentNode) v.el.parentNode.removeChild(v.el) }
+  function patchChildren(parent, oldCh, newCh, svg) {
+    const keyed = new Map(), unkeyed = []
+    for (const c of oldCh) { if (c.key != null) keyed.set(c.type + '|' + c.key, c); else unkeyed.push(c) }
+    const used = new Set()
+    let cursor = 0
+    for (const nc of newCh) {
+      let match = null
+      if (nc.key != null) { const k = nc.type + '|' + nc.key; match = keyed.get(k) || null; if (match) keyed.delete(k) }
+      else for (let i = cursor; i < unkeyed.length; i += 1) { const oc = unkeyed[i]; if (!used.has(oc) && oc.type === nc.type) { match = oc; used.add(oc); cursor = i + 1; break } }
+      if (match) patch(match, nc, svg); else mount(nc, svg)
+    }
+    for (const c of keyed.values()) unmount(c)
+    for (const c of unkeyed) if (!used.has(c)) unmount(c)
+    let ref = parent.firstChild
+    for (const nc of newCh) { if (nc.el !== ref) parent.insertBefore(nc.el, ref); else ref = ref.nextSibling }
+  }
+
+  function renderAll() {
+    scheduled = false
+    for (const root of roots) {
+      visited = new Set()
+      effects = []
+      refs = []
+      const out = []
+      expand(root.element, 'root', out)
+      if (!root.tree) { for (const v of out) root.container.appendChild(mount(v)) }
+      else patchChildren(root.container, root.tree, out, false)
+      root.tree = out
+      for (const [oldRef, newRef, el] of refs) { if (oldRef) setRef(oldRef, null); if (newRef) setRef(newRef, el) }
+      for (const [path, inst] of instances) {
+        if (!visited.has(path)) { for (const s of inst.hooks) if (s && typeof s.cleanup === 'function') s.cleanup(); instances.delete(path) }
+      }
+      const run = (queue) => { for (const e of effects) if (e.queue === queue) { if (typeof e.s.cleanup === 'function') e.s.cleanup(); const c = e.fn(); e.s.cleanup = typeof c === 'function' ? c : null } }
+      run('layout')
+      run('effect')
+    }
+  }
+  function render(element, container) { roots.push({ element, container, tree: null }); renderAll() }
+  // 卸载：渲染空树，未再访问到的组件实例会跑 effect 清理
+  function unmountAll() { for (const root of roots) root.element = null; renderAll(); roots.length = 0 }
+  return { React: { createElement, Fragment, useState, useReducer, useRef, useMemo, useCallback, useEffect, useLayoutEffect }, render, unmountAll }
+})()
+
+/* =================================================================== fetch 模拟 */
+let FX = null
+const json = (status, body) => Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => JSON.parse(JSON.stringify(body)) })
+// 与宿主一致：章标题开头的编号（含 3.2.）在写入时剥掉，再统一重排
+const bare = (title) => String(title).trim().replace(/^\d+(?:\.\d+)?\.\s*/, '')
+function stripNew(fx) {
+  // data=old：模拟旧宿主（没有 workspace / limits / historyDir / slug / mtime / limit，也没有 /project-agents）
+  delete fx.list.workspace; delete fx.list.limits; delete fx.list.historyDir
+  fx.list.pending.forEach((d) => delete d.slug)
+  for (const k of ['limit', 'mtime', 'historyLimit', 'historyDir']) { delete fx.agents.agents[k]; delete fx.agentsSections[k] }
+  fx.projectAgents = null
+}
+const POSTS = []
+function routeFetch(url, init) {
+  if (init && init.method === 'POST') POSTS.push({ path: String(url).replace(/^.*dsh-workspace-memory/, '').replace(/\?.*/, ''), body: init.body ? JSON.parse(init.body) : {} })
+  const reply = routeFetchNow(url, init)
+  const ms = Number(params.get('delay')) || 0
+  return ms ? new Promise((resolve) => setTimeout(() => resolve(reply), ms)) : reply
+}
+function routeFetchNow(url, init) {
+  const u = new URL(String(url), location.href)
+  const path = u.pathname.replace(/^\/api\/dsh-workspace-memory/, '')
+  const body = init && init.body ? JSON.parse(init.body) : {}
+  const mode = params.get('data')
+  if (mode === 'loading') return new Promise(() => {})
+  if (mode === 'error' && path === '/list') return json(400, { ok: false, reason: 'no-session', errors: ['无法确定工作区：请求缺少有效的 session 参数'] })
+  const L = FX.list
+  const secs = FX.agentsSections.sections || []
+  const now = () => new Date(Date.now()).toISOString()
+  switch (path) {
+    case '/list': return json(200, L)
+    case '/agents': return json(200, FX.agents)
+    case '/agents/sections': return json(200, FX.agentsSections)
+    case '/project-agents': return FX.projectAgents ? json(200, FX.projectAgents) : json(404, { error: 'not found' })
+    case '/accept': {
+      const d = L.pending.find((x) => x.id === body.id)
+      if (!d) return json(404, { ok: false, reason: 'not-found' })
+      L.pending = L.pending.filter((x) => x !== d)
+      if (d.load === 'always') {
+        if (d.newChapter) secs.push({ index: secs.length, level: 2, title: `${secs.length + 1}. ${d.title}`, body: d.body, bytes: 200 })
+        else { const s = secs.find((x) => bare(x.title) === d.chapterTitle); if (s) s.body = d.body }
+        if (d.supersedes) L.memories = L.memories.filter((m) => !(m.id === d.supersedes && m.scope === (d.supersedesScope || 'project')))
+        return json(200, { ok: true, scope: 'global', load: 'always', agents: d.newChapter ? { ok: true, action: 'added', title: d.title } : { ok: true, action: 'updated', chapter: d.chapter }, replaced: d.supersedes })
+      }
+      if (d.supersedes) L.memories = L.memories.filter((m) => m.id !== d.supersedes)
+      const id = d.slug || 'memory-' + d.id.slice(-6)
+      L.memories.unshift(Object.assign({}, d, { id, name: id, status: 'confirmed', modified: now() }))
+      return json(200, { ok: true, scope: d.scope, load: 'on-demand', file: id + '.md', replaced: d.supersedes })
+    }
+    case '/reject': L.pending = L.pending.filter((x) => x.id !== body.id); return json(200, { ok: true })
+    case '/forget': L.memories = L.memories.filter((m) => !(m.id === body.id && m.scope === body.scope)); return json(200, { ok: true, removed: body.id, scope: body.scope })
+    case '/save': {
+      const m = L.memories.find((x) => x.id === body.id && x.scope === body.scope)
+      if (!m) return json(404, { ok: false, status: 404, errors: ['找不到记忆 ' + body.id] })
+      const p = body.patch || {}
+      Object.assign(m, p, { id: p.slug || m.id, name: p.slug || m.id, modified: now() })
+      return json(200, { ok: true, status: 200, scope: m.scope, memory: m, renamed: !!p.slug && p.slug !== body.id, previousId: body.id, moved: !!p.scope && p.scope !== body.scope })
+    }
+    case '/promote': {
+      const m = L.memories.find((x) => x.id === body.id && x.scope === body.scope)
+      if (!m) return json(400, { ok: false, reason: 'not-found' })
+      secs.push({ index: secs.length, level: 2, title: `${secs.length + 1}. ${m.title}`, body: m.body, bytes: 300 })
+      L.memories = L.memories.filter((x) => x !== m)
+      return json(200, { ok: true, title: m.title, agentsPath: FX.agentsSections.path, memoryRemoved: true, fromScope: m.scope, scope: m.scope })
+    }
+    case '/open-agents': return json(200, { ok: true, agentsPath: FX.agentsSections.path, app: body.editor === 'system' ? 'system-default' : 'Typora', editorId: body.editor || 'typora' })
+    case '/agents/create': return json(400, { ok: false, reason: 'already-exists', path: FX.agentsSections.path })
+    case '/agents/save-section': case '/agents/add-section': case '/agents/delete-section': {
+      if (path === '/agents/add-section') {
+        const title = bare(body.title)
+        if (!title) return json(400, { ok: false, reason: 'empty-title' })
+        if (secs.some((x) => bare(x.title) === title)) return json(400, { ok: false, reason: 'already-present', title })
+        secs.push({ index: secs.length, level: 2, title: `${secs.length + 1}. ${title}`, body: body.body || '', bytes: 120 })
+      }
+      else {
+        const s = secs[body.index]
+        if (!s || bare(s.title) !== body.expectedTitle) return json(409, { ok: false, reason: 'section-moved', index: body.index })
+        if (path === '/agents/delete-section') secs.splice(body.index, 1)
+        else {
+          if (!bare(body.title)) return json(400, { ok: false, reason: 'empty-title' })
+          s.title = bare(body.title)
+          s.body = body.body
+        }
+      }
+      secs.forEach((s, i) => { s.index = i; s.title = `${i + 1}. ${bare(s.title)}` })
+      FX.agents.agents.sections = secs.length
+      return json(200, { ok: true, path: FX.agentsSections.path, bytes: FX.agentsSections.bytes })
+    }
+    default: return json(404, {})
+  }
 }
 
-function renderNode(node, parent) {
-  if (node === null || node === undefined || node === false || node === true) return;
-  if (Array.isArray(node)) { for (const child of node) renderNode(child, parent); return; }
-  if (typeof node === 'string' || typeof node === 'number') {
-    parent.appendChild(document.createTextNode(String(node)));
-    return;
+/* =================================================================== 启动 */
+const loadScript = (src) => new Promise((resolve, reject) => { const s = document.createElement('script'); s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('load ' + src)); document.head.appendChild(s) })
+
+async function boot() {
+  // 宿主 token 与外框样式：与预览同一份
+  const preview = await (await fetch('../panel.html', { cache: 'no-store' })).text()
+  for (const id of ['host-emulation', 'preview-chrome']) {
+    const m = preview.match(new RegExp('<style id="' + id + '">([\\s\\S]*?)<\\/style>'))
+    if (!m) throw new Error('missing style ' + id)
+    const el = document.createElement('style'); el.textContent = m[1]; document.head.appendChild(el)
   }
-  if (typeof node.type === 'function') {
-    const name = node.type.name || 'anon';
-    const parentKey = stack.join('/');
-    const seqKey = parentKey + '|' + name;
-    const seq = (instanceSeq.get(seqKey) || 0) + 1;
-    instanceSeq.set(seqKey, seq);
-    stack.push(name + '#' + seq);
-    bucketOf(stack.join('/')).cursor = 0;
-    try {
-      renderNode(node.type(node.props), parent);
-    } finally {
-      stack.pop();
-    }
-    return;
+  document.documentElement.dataset.theme = params.get('theme') === 'dark' ? 'dark' : 'light'
+  document.getElementById('frame').style.width = (Number(params.get('w')) || 640) + 'px'
+
+  FX = await (await fetch('./fixture.json', { cache: 'no-store' })).json()
+  if (params.get('data') === 'empty') {
+    FX.list.memories = []; FX.list.pending = []
+    FX.agentsSections = { ok: false, reason: 'agents-missing', path: FX.agentsSections.path, limit: 10000, historyDir: FX.agentsSections.historyDir }
+    FX.agents.agents = { path: FX.agents.agents.path, exists: false, bytes: 0, sections: 0, limit: 10000 }
+    FX.projectAgents.team = { path: FX.projectAgents.team.path, exists: false, bytes: 0, mtime: null, body: '', truncated: false }
   }
-  if (typeof node.type === 'string') {
-    const element = document.createElement(node.type);
-    for (const [key, value] of Object.entries(node.props)) applyProps(element, key, value);
-    for (const child of node.children || []) renderNode(child, element);
-    // select 延迟赋值：此时 option 才存在
-    if (element.dataset && element.dataset.pendingValue !== undefined) {
-      element.value = element.dataset.pendingValue;
-      delete element.dataset.pendingValue;
-    }
-    parent.appendChild(element);
-    return;
+  if (params.get('data') === 'old') stripNew(FX)
+
+  // 固定「现在」，相对时间与预览一致
+  const NOW = Date.parse(params.get('now') || FX.now)
+  const realNow = Date.now.bind(Date), bootAt = realNow()
+  Date.now = () => NOW + (realNow() - bootAt)
+  window.fetch = routeFetch
+
+  let React = MiniReact.React, render = MiniReact.render, unmount = MiniReact.unmountAll
+  const base = params.get('react')
+  if (base) {
+    await loadScript(base.replace(/\/$/, '') + '/react.development.js')
+    await loadScript(base.replace(/\/$/, '') + '/react-dom.development.js')
+    React = window.React
+    // ?strict=1：包一层 StrictMode（开发态会把布局效果先卸再挂一次，检验 start / dispose 可重入）
+    let root = null
+    render = (el, container) => { root = window.ReactDOM.createRoot(container); root.render(params.get('strict') === '1' ? React.createElement(React.StrictMode, null, el) : el) }
+    unmount = () => root && root.unmount()
   }
-  for (const child of node.children || []) renderNode(child, parent);
+
+  let definition = null
+  window.__ModuleLoader__ = { load(def) { definition = def } }
+  await loadScript('../../client.js?' + realNow())
+  const module = definition.factory((name) => { if (name === 'react') return React; throw new Error('unexpected require: ' + name) })
+  const registered = {}
+  const disposers = []
+  const ctx = {
+    // 像宿主一样记下每个 effect 的清理函数，卸载时倒序调用
+    effect(fn) { const d = fn(); if (typeof d === 'function') disposers.push(d); return typeof d === 'function' ? d : () => {} },
+    get(name) {
+      if (name === 'sidebarRightTabs') return { register: () => () => {} }
+      if (name === 'locale') return { getLocale: () => ({ active: params.get('lang') === 'en' ? 'en' : 'zh' }) }
+      return undefined
+    },
+    slots: { inject(name, fn) { return fn() }, register(o, c) { registered[o.key] = c; return () => {} } },
+  }
+  module.apply(ctx)
+  const Panel = registered['dsh-workspace-memory/list']
+  if (!Panel) throw new Error('panel not registered')
+  render(React.createElement(Panel, { sessionId: 'sess_demo_0001' }), document.getElementById('mount'))
+  window.__harness = {
+    posts: POSTS,
+    // 卸载面板并释放插件：返回释放后还残留什么（应全部为 false / 0）
+    unmount() {
+      unmount()
+      while (disposers.length) { try { disposers.pop()() } catch (error) { console.error(error) } }
+      return { panelLeft: !!document.querySelector('.wsm-panel'), styleLeft: !!document.querySelector('style[data-dsh-workspace-memory]') }
+    },
+  }
+
+  const wait = (sel, tries = 80) => new Promise((resolve, reject) => {
+    const tick = (n) => { const el = document.querySelector(sel); if (el) return resolve(el); if (n <= 0) return reject(new Error('timeout ' + sel)); setTimeout(() => tick(n - 1), 50) }
+    tick(tries)
+  })
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+  if (params.get('data') === 'loading') { await pause(300); document.title = 'READY'; return }
+  if (params.get('data') === 'error') { await wait('.wsm-empty[data-error]'); document.title = 'READY'; return }
+  await wait('.wsm-cell')
+  await pause(80)
+  const view = params.get('view')
+  const order = ['overview', 'pending', 'instructions', 'memories']
+  if (view && view !== 'overview') { document.querySelectorAll('.wsm-tab')[order.indexOf(view)].click(); await pause(120) }
+  if (view === 'instructions' && params.get('ins') === 'project') { (await wait('.wsm-seg > button:nth-of-type(2)')).click(); await pause(120) }
+  if (params.get('flow') === '1') { (await wait('.wsm-disclose')).click(); await pause(80) }
+  const mem = params.get('mem')
+  if (mem) {
+    if (view !== 'memories') { document.querySelectorAll('.wsm-tab')[3].click(); await pause(120) }
+    const row = mem.includes(':') ? await wait('.wsm-row[data-key="' + CSS.escape(mem) + '"]') : await wait('.wsm-row[data-key$=":' + CSS.escape(mem) + '"]')
+    row.click()
+    await pause(160)
+  }
+  await pause(200)
+  document.title = 'READY'
 }
-
-let rootComponent = null;
-let rootProps = {};
-
-function renderAll() {
-  if (rendering) return;
-  rendering = true;
-  frameCount += 1;
-  if (window.__DBG__) window.__DBG__.renders += 1;
-  if (frameCount > 60) {
-    document.getElementById('mount').textContent = '渲染次数过多，疑似效果死循环';
-    rendering = false;
-    return;
-  }
-
-  instanceSeq = new Map();
-  effectQueue = [];
-  const mount = document.getElementById('mount');
-  const next = document.createElement('div');
-  next.style.height = '100%';
-  stack.length = 0;
-  renderNode(h(rootComponent, rootProps), next);
-  // 保留根容器：ResizeObserver 观察的节点不能被换掉
-  mount.replaceChildren(next);
-  rendering = false;
-
-  for (const { previous, effect, record } of effectQueue) {
-    if (typeof previous === 'function') previous();
-    const cleanup = effect();
-    record.cleanup = typeof cleanup === 'function' ? cleanup : null;
-  }
-}
-
-/* ------------------------------------------------------------- 挂载流程 */
-window.__ModuleLoader__ = { load(definition) { window.__WSM_DEF__ = definition; } };
-window.__DBG__ = { renders: 0, sets: [] };
-
-// file:// 下 fetch 不可用，fixture 由脚本同步注入；惰性读取，因为本段先执行
-const getFixture = () => Promise.resolve(window.__FIXTURE__);
-
-window.fetch = (url) => {
-  const target = String(url);
-  // 先判 /agents/sections：它也是 /agents 前缀，顺序反了会喂错 fixture
-  if (target.includes('/agents/sections')) return getFixture().then((fixture) => ({ ok: true, json: async () => fixture.agentsSections }));
-  if (target.includes('/list')) return getFixture().then((fixture) => ({ ok: true, json: async () => fixture.list }));
-  if (target.includes('/agents')) return getFixture().then((fixture) => ({ ok: true, json: async () => fixture.agents }));
-  return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
-};
-
-window.addEventListener('load', () => {
-  try {
-    const definition = window.__WSM_DEF__;
-    if (!definition) { document.body.textContent = '未捕获到插件定义'; return; }
-
-    const react = { createElement: h, useState, useEffect, useRef, useMemo, useCallback, Fragment: 'fragment' };
-    const module = definition.factory((name) => {
-      if (name === 'react') return react;
-      throw new Error('unexpected require: ' + name);
-    });
-
-    const registered = {};
-    const ctx = {
-      effect(fn) { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {}; },
-      get(name) {
-        if (name === 'sidebarRightTabs') return { register: () => () => {} };
-        if (name === 'layout') return { openRightbar() {} };
-        if (name === 'sidebarRight') return { openTab() {} };
-        return undefined;
-      },
-      on() {},
-      slots: {
-        inject(name, fn) { return fn(); },
-        register(options, component) { registered[options.key || options.name] = component; return () => {}; },
-      },
-    };
-    module.apply(ctx);
-
-    const Panel = registered['dsh-workspace-memory/list'];
-    if (!Panel) { document.body.textContent = '未注册面板组件'; return; }
-
-    rootComponent = Panel;
-    rootProps = { sessionId: 'harness' };
-    renderAll();
-
-    // 用轮询代替固定延时：虚拟时间下渲染时机不稳，固定 setTimeout 会点空
-    const waitFor = (selector, callback, tries = 60) => {
-      const found = document.querySelector(selector);
-      if (found) { callback(found); return; }
-      if (tries <= 0) { document.title = 'WAIT-TIMEOUT ' + selector; return; }
-      setTimeout(() => waitFor(selector, callback, tries - 1), 100);
-    };
-
-    const params = new URLSearchParams(location.search);
-    const wantsDetail = params.get('detail') === '1' || params.get('view') === 'preview' || params.get('guard') === '1';
-
-    if (wantsDetail) {
-      waitFor('.wsm-item', (first) => first.click());
-    }
-
-    // ?agents=1：切到「全局 AGENTS.md」页签
-    if (params.get('agents') === '1') {
-      waitFor('.wsm-header-top .wsm-tabs button:nth-child(2)', (tab) => {
-        tab.click();
-        document.title = 'AGENTS-TAB-CLICKED';
-      });
-    }
-
-    if (params.get('view') === 'preview') {
-      waitFor('.wsm-editor-tabs button:nth-child(2)', (preview) => {
-        preview.click();
-        document.title = 'PREVIEW-CLICKED';
-      });
-    }
-
-    if (params.get('guard') === '1') {
-      waitFor('#wsm-title', (title) => {
-        title.value = '改动过的标题';
-        title.dispatchEvent(new Event('input', { bubbles: true }));
-      });
-      setTimeout(() => {
-        const items = [...document.querySelectorAll('.wsm-item')];
-        if (items[1]) items[1].click();
-        document.title = 'GUARD-TRIGGERED items=' + items.length;
-      }, 1500);
-    }
-
-    // 探针：把测量到的尺寸写进标题，便于 --dump-dom 时核对
-    setTimeout(() => {
-      const panel = document.querySelector('.wsm-panel');
-      const rect = panel ? panel.getBoundingClientRect() : { width: -1 };
-      document.title = `PROBE ro=${typeof ResizeObserver} inner=${window.innerWidth} frame=${document.getElementById('frame').clientWidth} panel=${Math.round(rect.width)} layout=${panel ? panel.dataset.layout : 'none'} renders=${window.__DBG__ ? window.__DBG__.renders : -1} sets=${window.__DBG__ ? window.__DBG__.sets.join(',') : ''}`;
-    }, 1200);
-  } catch (error) {
-    document.body.textContent = 'harness error: ' + (error && error.stack ? error.stack : error);
-  }
-});
+boot().catch((e) => fail(e && e.stack || String(e)))
 </script>
-<script src="./fixture.js"></script>
-<script src="../../client.js"></script>
 </body>
 </html>

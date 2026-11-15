@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Workspace Memory",
-    "description": "Persistent workspace memory: one Markdown file per memory, a MEMORY.md index injected every turn, hybrid vector + keyword recall, and an editable card panel in the right sidebar."
+    "description": "Persistent workspace memory: one Markdown file per memory, a MEMORY.md index injected every turn, hybrid vector + keyword recall, and a right-sidebar memory panel to see what is remembered where, review drafts, and edit the global instructions and memories."
   }
 }
