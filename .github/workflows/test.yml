@@ -1,0 +1,54 @@
+name: Tests
+
+# 定时 + push + PR 都跑。
+#
+# 为什么要定时：发版工作流（publish-pending.yml）只在「有提交待发布」时才跑测试，
+# 安静期里没有任何回归检测。而环境会自己变旧——GitHub 会弃用 Node 20 运行时、
+# 换 runner 镜像（ubuntu-latest 曾宣布迁移到 Ubuntu 26）、可选依赖 leanvec 的解析
+# 也可能变。这些在「急着发版」的那一刻才暴露最难受，所以每天兜一次底。
+#
+# 为什么要 Windows job：cmd 引号那批用例只在 Windows 有意义，Linux 上只能 SKIP，
+# 等于从来没在 CI 上验证过。这个组合让它们真正跑起来。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # 同一个分支/PR 的新一轮直接取代旧一轮（matrix 属于 job 级上下文，不能写在这里）
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 一个组合挂了不要藏住其它组合的结果
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 18 }
+          - { os: ubuntu-latest, node: 20 }
+          - { os: windows-latest, node: 20 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 有两条路径必须有嵌入模型才成立：语义去重（extract.test.mjs）与召回金标集
+      # （golden.test.mjs）。装不上就 continue，对应用例会打印 SKIP 而不是假通过。
+      - name: Install the optional embedding model
+        continue-on-error: true
+        run: npm install --no-save --include=optional
+
+      - name: Run the test suite
+        run: npm test
