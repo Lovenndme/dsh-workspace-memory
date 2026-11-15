@@ -10,6 +10,10 @@
 import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Node 18 没有 import.meta.dirname（20.11 才加），统一用它替代
+const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 let failures = 0
 const check = (label, condition, detail) => {
@@ -32,7 +36,7 @@ globalThis.window = {
 }
 globalThis.document = { addEventListener: () => {}, removeEventListener: () => {} }
 
-const clientPath = path.join(import.meta.dirname, '..', 'client.js')
+const clientPath = path.join(HERE, '..', 'client.js')
 const source = readFileSync(clientPath, 'utf8')
 // client.js 是普通脚本：直接在函数里 eval，避免顶层 const 泄漏到模块作用域
 new Function('window', 'globalThis', source)(globalThis.window, globalThis)

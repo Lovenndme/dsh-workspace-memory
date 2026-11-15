@@ -8,6 +8,10 @@
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Node 18 没有 import.meta.dirname（20.11 才加），统一用它替代
+const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 let failures = 0
 const check = (label, condition, detail) => {
@@ -29,7 +33,7 @@ globalThis.window = {
 }
 globalThis.document = { addEventListener: () => {}, removeEventListener: () => {} }
 
-const source = readFileSync(path.join(import.meta.dirname, '..', 'client.js'), 'utf8')
+const source = readFileSync(path.join(HERE, '..', 'client.js'), 'utf8')
 new Function('window', 'globalThis', source)(globalThis.window, globalThis)
 if (!definition) {
   console.error('无法捕获插件定义')
@@ -106,7 +110,7 @@ console.log('\n== 失败原因码 → 文案（原码绝不外露）==')
   // 宿主的原因码不手写：从 index.js 读出来——REASON_STATUS 的键 + HTTP 路由（register(`${API}/…`)）里、以及路由
   // 一路调用到的函数里出现的 `reason: '…'` 与 `RequestError(状态, '…')`。只给模型看的工具结果（memory_remember 的
   // needs-slug 之类）不经过路由，不在其中。宿主新增一个面板能收到的码而客户端没认，这里就会失败。
-  const hostSource = readFileSync(path.join(import.meta.dirname, '..', 'index.js'), 'utf8')
+  const hostSource = readFileSync(path.join(HERE, '..', 'index.js'), 'utf8')
   const braceBlock = (from) => {
     const start = hostSource.indexOf('{', from)
     let depth = 0
