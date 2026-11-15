@@ -10,4 +10,4 @@
 # 结果中文查询会返回 int16 / sha1 这类无关符号还打 100 分。这里不重复那个错误。
 - insert:
     - id: dsh-workspace-memory
-      name: dsh-workspace-memory
+      name: '@lovenndme/dsh-workspace-memory'

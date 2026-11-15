@@ -66,11 +66,21 @@
 
 ## 安装
 
-这个插件以本地目录 link 的方式装进 DSH 的 profile。在 DSH 里让 agent 调用插件管理工具：
+从 npm 装（推荐）：
+
+```text
+plugin_manager install_bundle --target @lovenndme/dsh-workspace-memory
+```
+
+或者以本地目录 link 的方式装：
 
 ```text
 plugin_manager install_bundle --target <插件目录>
 ```
+
+**国内网络**：DSH 的「发现」面板走 GitHub Pages，无代理经常加载不出来（表现为「搜不到插件」）。
+这时走「插件 → 添加插件 → 安装源选『中国大陆镜像源』→ 粘贴包名 `@lovenndme/dsh-workspace-memory`」
+即可；结束后 npm 会自动同步，通常几分钟就能拿到最新版。只有安装这一步需要联网，装完完全离线可用。
 
 装好后把它**先禁用、再启用**一次，让宿主换上新模块（在插件列表里切，或者让 agent 调用）：
 
@@ -149,7 +159,7 @@ node scripts/install-deps.mjs   # 约 85 MB，装到 ~/.dsh/dsh-workspace-memory
 
 ```yaml
 - id: dsh-workspace-memory
-  name: dsh-workspace-memory
+  name: '@lovenndme/dsh-workspace-memory'
   config:
     enableExtraction: true
     agentWrites: direct
