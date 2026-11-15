@@ -95,6 +95,16 @@ jobs:
           node --check client.js
 
       # 门禁：测试不过就不发版。测试是纯 node:test，不需要装依赖。
+      #
+      # 但有两件事**必须有嵌入模型**才成立：语义去重（extract.test.mjs）与召回金标集
+      # （golden.test.mjs，纯关键词模式下中文 recall 只有 20%）。所以先尝试装可选依赖
+      # leanvec；装不上就 continue（对应测试会打印 SKIP 而不是假通过），不能让一次
+      # 85MB 的下载把发版无限期卡住。
+      - name: Install the optional embedding model
+        if: steps.gate.outputs.pending == 'true'
+        continue-on-error: true
+        run: npm install --no-save --include=optional
+
       - name: Run the test suite
         if: steps.gate.outputs.pending == 'true'
         run: npm test

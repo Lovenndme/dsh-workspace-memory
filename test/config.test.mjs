@@ -5,6 +5,7 @@
  * 坏值退回默认值并记录 issue，issue 通过 memory_status 暴露给用户。
  */
 import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
+import path from 'node:path'
 const mod = await import('../index.js')
 
 let failures = 0
@@ -28,13 +29,15 @@ console.log('== 缺省 ==')
 
 console.log('\n== 合法覆盖 ==')
 {
-  const r = R({ minVectorScore: 0.4, weightVector: 0.5, indexMaxLines: 300, enableExtraction: true, memoryDir: 'C:\\tmp\\mem' })
+  // 用平台无关的绝对路径：CI 在 Linux 上跑，硬编码 `C:\tmp\mem` 不是绝对路径会被拒
+  const ABS_MEM = path.resolve('/tmp/wsm-memory-config')
+  const r = R({ minVectorScore: 0.4, weightVector: 0.5, indexMaxLines: 300, enableExtraction: true, memoryDir: ABS_MEM })
   check('全部生效', r.issues.length === 0, JSON.stringify(r.issues))
   check('minVectorScore=0.4', r.config.minVectorScore === 0.4, String(r.config.minVectorScore))
   check('weightVector=0.5', r.config.weightVector === 0.5, String(r.config.weightVector))
   check('indexMaxLines=300', r.config.indexMaxLines === 300, String(r.config.indexMaxLines))
   check('enableExtraction=true', r.config.enableExtraction === true)
-  check('memoryDir 保留绝对路径', r.config.memoryDir === 'C:\\tmp\\mem', r.config.memoryDir)
+  check('memoryDir 保留绝对路径', r.config.memoryDir === ABS_MEM, r.config.memoryDir)
 }
 
 console.log('\n== 字符串数字可接受 ==')

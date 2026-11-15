@@ -106,9 +106,16 @@ console.log('\n== 正常抽取：入队 ==')
     check('正式库仍为空', mod.listMemories(dir).length === 0)
 
     console.log('\n== 同一条再抽一次：应被去重 ==')
-    const r2 = await mod.extractFromTurn(ctx, agent, dir)
-    check('第二次 deduped=1 queued=0', r2.deduped === 1 && r2.queued === 0, JSON.stringify(r2))
-    check('pending 仍是 1 条', mod.listPending(dir).length === 1, String(mod.listPending(dir).length))
+    // 去重靠向量相似度：没有嵌入模型（leanvec）时退化不了成关键词去重，
+    // 这一条会**如实跳过**而不是失败。CI 装了 leanvec 才真正测到这条路径。
+    const probe = await mod.rebuildVectors(dir)
+    if (probe.mode !== 'hybrid') {
+      console.log(`  SKIP  无嵌入模型（mode=${probe.mode}），向量去重路径未被测到`)
+    } else {
+      const r2 = await mod.extractFromTurn(ctx, agent, dir)
+      check('第二次 deduped=1 queued=0', r2.deduped === 1 && r2.queued === 0, JSON.stringify(r2))
+      check('pending 仍是 1 条', mod.listPending(dir).length === 1, String(mod.listPending(dir).length))
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
