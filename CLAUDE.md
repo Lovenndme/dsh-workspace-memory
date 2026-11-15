@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 这是什么
 
-DeepSeek Harness（DSH / Cordis）插件：工作区级持久记忆，仿 Claude Code 的 auto-memory 层。设计取舍与事故记录分别在 `README.md`（设计）和 `HANDOFF.MD`（当前状态 + 踩坑），改动前先读相关章节，改完同步更新。
+DeepSeek Harness（DSH / Cordis）插件：工作区级持久记忆，仿 Claude Code 的 auto-memory 层。设计取舍与事故记录分别在 `docs/DESIGN.md`（设计）和 `HANDOFF.MD`（当前状态 + 踩坑），改动前先读相关章节，改完同步更新。根目录的 `README.md` 是写给使用者的安装与使用说明（随包发布），设计内容不要写进去，需要时一句话指向 `docs/DESIGN.md`。
 
 - **没有构建步骤、没有运行时依赖**（只有可选的 `leanvec`）。纯 ESM，Node ≥ 18。
 - git 仓库（`main`，2026-11-11 建立），`.gitattributes` 固定 LF。插件是 link 装进 profile 的——对它做 pnpm remove/重装会顺着 junction 删穿工作区（含 `.git`），见 `~/.dsh/AGENTS.md`。
@@ -41,7 +41,7 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 ### 存储
 
 - 主目录一律经 `dshHome()`（`$DSH_HOME` 非空白时用它，否则 `~/.dsh`），不要再手拼 `os.homedir(), '.dsh'`；写给用户或模型看的文字用 `dshHomeDisplay()`（`~/.dsh` 或 `$DSH_HOME`）。下文的 `~/.dsh` 都指它。
-- 去向由 `scope`（适用范围）× `load`（加载方式）决定：`project + on-demand` 进项目库，`global + on-demand` 进全局按需库，`global + always` 进全局 AGENTS.md 的一章，`project + always` 不写（返回 `belongs-in-project-agents`，指向往上最近的 `.git` 目录下的项目 AGENTS.md）。`user` / `feedback` + `global` 一律按 `always` 处理。设计理由与用户的去处决定见 README「记忆写到哪」。
+- 去向由 `scope`（适用范围）× `load`（加载方式）决定：`project + on-demand` 进项目库，`global + on-demand` 进全局按需库，`global + always` 进全局 AGENTS.md 的一章，`project + always` 不写（返回 `belongs-in-project-agents`，指向往上最近的 `.git` 目录下的项目 AGENTS.md）。`user` / `feedback` + `global` 一律按 `always` 处理。设计理由与用户的去处决定见 `docs/DESIGN.md`「记忆写到哪」。
 - 项目库：`~/.dsh/projects/<encodeProjectPath(项目根)>/memory/`，`MEMORY.md` 索引 + 每条一个 `<英文 slug>.md`（平铺）。插件私有状态在**同级**的 `.memory-state/{pending,history}/`。
 - 全局按需库：`~/.dsh/dsh-workspace-memory/global/memory/`，唯一入口 `globalMemoryDirOf()`（配置键 `globalMemoryDir`）。布局与项目库相同，`.memory-state/` 只放 history；草稿不论去向，永远在会话所在项目的 `pending/`。两个库之间 id 不重复（`avoidIds`）。
 - 「项目根」= 包含 cwd 的**最长已注册 DSH 工作区路径**（`projectRootFor`），不是 git root。编码规则与 DSH sessions 目录一致：`C:\a\b` → `--C-a-b--`。项目指令的根（`instructionsRootFor`，往上最近的 `.git`）是另一回事，只用来告诉模型项目 AGENTS.md 在哪。
@@ -50,7 +50,7 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 
 ### 写入路径（`memory_remember`）
 
-2026-11-14 重设计，之后经两次独立审查修复、一轮代理模型评测驱动的改动；设计与局限在 README「记忆写到哪」「记忆怎么进库：按来源分流」，状态、审查、评测与未验证项在 HANDOFF 第二十五节。`execute` 的顺序：
+2026-11-14 重设计，之后经两次独立审查修复、一轮代理模型评测驱动的改动；设计与局限在 `docs/DESIGN.md`「记忆写到哪」「记忆怎么进库：按来源分流」，状态、审查、评测与未验证项在 HANDOFF 第二十五节。`execute` 的顺序：
 
 1. `checkRememberArgs` 自行校验入参，非法枚举或缺必填返回 `invalid-argument`，一个字都不写（`scope` 在 `required` 里，但缺失仍取 `project`）。
 2. **先看 `type` 是否属于改道类型**（`ROUTED_TYPES`：`procedure` / `repo-rule` / `docs`）：是就什么都不保存，`routedReply` 返回 `belongs-elsewhere` 与 `home` 及去处说明。例外是「更新留在原处」：同时带 `supersedes` 且能解析到确实存在的记忆（`keptAsMemoryTarget`）时不改道，按被取代那条的类型、`load: on-demand` 走下面的正常写入，返回带 `keptAsMemory: true`。
