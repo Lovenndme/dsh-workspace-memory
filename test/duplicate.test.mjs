@@ -11,6 +11,7 @@
  *
  * 全部使用临时工作区，不碰真实记忆库。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -57,9 +58,10 @@ function makeEnv(extraConfig = {}) {
     },
   }
 
-  mod.apply(ctx, { agentsFile: path.join(root, 'AGENTS.md'), duplicateCheck: true, ...extraConfig })
+  mod.apply(ctx, { agentsFile: path.join(root, 'AGENTS.md'), memoryDir: path.join(root, 'proj', 'memory'), globalMemoryDir: path.join(root, 'global', 'memory'), agentWrites: 'direct', duplicateCheck: true, ...extraConfig })
 
-  const projectDir = path.join(os.homedir(), '.dsh', 'projects', mod.encodeProjectPath(workspace))
+  // 记忆库与全局按需库都放在临时目录（经 apply 传入），不碰 ~/.dsh
+  const projectDir = path.join(root, 'proj')
   const memoryDir = path.join(projectDir, 'memory')
 
   return {
@@ -88,7 +90,8 @@ const PUBLISH_A = {
   title: '发布只用 GitHub Actions 且每 4 小时批量',
   description: '发布节奏与渠道',
   body: '规则：每 4 小时批量发布，只用 GitHub Actions。',
-  confidence: 0.95,
+  type: 'project',
+  source: 'agent',
 }
 
 const PUBLISH_B = {
@@ -96,7 +99,8 @@ const PUBLISH_B = {
   title: '发布只用 GitHub Actions，每 4 小时批量发',
   description: '发布节奏与渠道（修订）',
   body: '规则：每 4 小时批量发布，只用 GitHub Actions；本地脚本已关闭。',
-  confidence: 0.95,
+  type: 'project',
+  source: 'agent',
 }
 
 console.log('== 空库首次写入不受影响 ==')
@@ -187,7 +191,8 @@ console.log('\n== 不相关主题不误拦 ==')
       title: '界面里不要自行添加解释性文字',
       description: 'UI 文案约定',
       body: '规则：界面只呈现数据与控件，解释写进 README。',
-      confidence: 0.95,
+      type: 'feedback',
+      source: 'agent',
     })
     check('直接写入', typeof result.id === 'string', JSON.stringify(result))
     check('变成 2 条', env.ids().length === 2, env.ids().join(','))

@@ -11,6 +11,7 @@
  *
  * 全部使用隔离临时目录；AGENTS.md 一律指向临时文件，绝不碰真实的 ~/.dsh。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import os from 'node:os'
@@ -493,7 +494,7 @@ console.log('\n== extractFromTurn：墙钟超时，不会拖死 turn-stopping ==
 {
   const session = {
     snapshotEvents: () => [
-      { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '以后每次改完插件都要先跑测试再提交，别再忘了。'.repeat(12) }] } },
+      { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '以后每次改完插件都要先跑测试再提交，别再忘了。'.repeat(12) }] } },
     ],
     requestContext: () => ({ provider: 'p', model: 'm' }),
   }

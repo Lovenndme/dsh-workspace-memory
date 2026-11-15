@@ -8,6 +8,7 @@
  * 测试不联网：用不带 llm 的假 ctx，只要 `skipped` 不再是 extraction disabled，
  * 就证明守卫被绕过了（会停在后面的 'llm unavailable'）。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 const mod = await import('../index.js')
 
 let failures = 0

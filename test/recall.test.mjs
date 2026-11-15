@@ -8,6 +8,7 @@
  * 跨语言（中文问 / 英文记忆）单独列为已知限制：leanvec 是按语言与字面聚类的
  * 静态嵌入表，不做中英语义桥接。这里只报告实测值，不假装它做不到的事。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

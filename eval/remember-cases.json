@@ -1,0 +1,1416 @@
+{
+  "_说明": "主路径评测场景（memory_remember 被模型主动调用的那条路）。全部合成，不含真实人名/公司/项目/地址/凭证。字段含义见 eval/remember.mjs 文件头。 workspace = 场景级环境差异（committedPatch / workingPatch / files，见 eval/lib/remember-workspace.mjs 的 applyOverlay）。",
+  "cases": [
+    {
+      "id": "A1",
+      "split": "dev",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "登录页刷新之后偶尔白屏，帮我看看。"
+        },
+        {
+          "role": "assistant",
+          "content": "Found it: the auth guard reads the token before the store is hydrated, so the first render sees null and redirects to an empty route. I moved the check into the hydration callback in src/router/guard.ts, and the blank screen no longer reproduces."
+        }
+      ],
+      "message": "你怎么用英文回的？我只看得懂中文。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "user",
+          "feedback"
+        ],
+        "scope": [
+          "global"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "workspace": {
+        "committedPatch": {
+          "src/router/guard.ts": [
+            [
+              "  onHydrated(() => {\n    router.beforeEach((to) => (getToken() || to.path === '/login' ? true : '/login'))\n  })",
+              "  router.beforeEach((to) => (getToken() || to.path === '/login' ? true : '/login'))"
+            ]
+          ]
+        }
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留；原来的「加分：load always」已变成必要条件，删掉。"
+    },
+    {
+      "id": "A2",
+      "split": "test",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "为什么这个列表一滚动就卡？"
+        },
+        {
+          "role": "assistant",
+          "content": "主要是主线程上的强制同步布局：滚动回调里读取 offsetHeight 会触发 forced synchronous layout，再叠加没有做窗口化的长列表，每帧的样式重算和布局都超出 16.6ms 的帧预算；合成层也没有提升（缺少 will-change 或 transform 触发的 layer promotion），光栅化落在主线程上。建议引入 windowing，把 DOM 读写分批（read/write batching），并用 requestAnimationFrame 节流。"
+        }
+      ],
+      "message": "太绕了，听不懂，用大白话讲。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "feedback",
+          "user"
+        ],
+        "scope": [
+          "global"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留；原来的「加分：load always」已变成必要条件，删掉。"
+    },
+    {
+      "id": "A3",
+      "split": "dev",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "把订单导出功能做完，拆个任务清单跟踪一下。"
+        },
+        {
+          "role": "assistant",
+          "content": "任务清单：\n- [ ] 导出接口\n- [ ] 前端导出入口\n- [ ] 权限校验\n- [ ] 单元测试\n开始做第一项。"
+        },
+        {
+          "role": "user",
+          "content": "继续。"
+        },
+        {
+          "role": "assistant",
+          "content": "全部完成：导出接口、前端导出入口、权限校验、单元测试都已完成并提交。"
+        }
+      ],
+      "message": "任务清单里怎么还挂着两项没勾？做完一项就该勾一项。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "feedback"
+        ],
+        "scope": [
+          "global"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留；原来的「加分：load always」已变成必要条件，删掉。"
+    },
+    {
+      "id": "A4",
+      "split": "dev",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "把限流阈值从 100 调到 200。"
+        },
+        {
+          "role": "assistant",
+          "content": "已把 config/prod.yaml 里的 rate_limit 从 100 改成 200 并保存。"
+        }
+      ],
+      "message": "别一上来就动真的，先出个预览给我看，我点头了再改正式的。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "feedback"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "workspace": {
+        "committedPatch": {
+          "config/prod.yaml": [
+            [
+              "rate_limit: 200",
+              "rate_limit: 100"
+            ]
+          ]
+        }
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+    },
+    {
+      "id": "A5",
+      "split": "test",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "帮我把这批日志做个归类总结。"
+        },
+        {
+          "role": "assistant",
+          "content": "我选了最大的那个模型，思考强度调到最高来跑这次归类，结果已经写到 out/summary.md。"
+        }
+      ],
+      "message": "用哪个模型、思考强度开多高，这种要先问我，别自己定。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "feedback"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "workspace": {
+        "files": {
+          "out/summary.md": "# 日志归类总结\n\n- 超时：12 条\n- 鉴权失败：5 条\n- 其他：3 条\n",
+          "logs/batch-1115.log": "2026-11-15T09:00:01Z ERROR upload timeout after 30s (record R3100)\n2026-11-15T09:04:01Z ERROR upload timeout after 30s (record R3101)\n2026-11-15T09:08:01Z ERROR upload timeout after 30s (record R3102)\n2026-11-15T09:12:01Z ERROR upload timeout after 30s (record R3103)\n2026-11-15T09:16:01Z ERROR upload timeout after 30s (record R3104)\n2026-11-15T09:20:01Z ERROR upload timeout after 30s (record R3105)\n2026-11-15T09:24:01Z ERROR upload timeout after 30s (record R3106)\n2026-11-15T09:28:01Z ERROR upload timeout after 30s (record R3107)\n2026-11-15T09:32:01Z ERROR upload timeout after 30s (record R3108)\n2026-11-15T09:36:01Z ERROR upload timeout after 30s (record R3109)\n2026-11-15T09:40:01Z ERROR upload timeout after 30s (record R3110)\n2026-11-15T09:44:01Z ERROR upload timeout after 30s (record R3111)\n2026-11-15T10:00:12Z ERROR 401 token expired (user U200)\n2026-11-15T10:07:12Z ERROR 401 token expired (user U201)\n2026-11-15T10:14:12Z ERROR 401 token expired (user U202)\n2026-11-15T10:21:12Z ERROR 401 token expired (user U203)\n2026-11-15T10:28:12Z ERROR 401 token expired (user U204)\n2026-11-15T11:02:40Z ERROR disk quota exceeded on /var/data\n2026-11-15T11:15:05Z ERROR unknown field \"discountRate\" in order payload\n2026-11-15T11:31:57Z ERROR schema version mismatch: expected 3, got 2\n"
+        }
+      },
+      "note": "2026-11-15 按用户决定修改（环境）：补上「这批日志」logs/batch-1115.log（*.log 已被 .gitignore 忽略），与 out/summary.md 的 12 / 5 / 3 对得上。"
+    },
+    {
+      "id": "A6",
+      "split": "dev",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "提交一下。"
+        },
+        {
+          "role": "assistant",
+          "content": "已提交：fix: correct total price rounding"
+        }
+      ],
+      "message": "以后提交说明都用中文写。",
+      "accept": [
+        "propose:agents",
+        "file:agents",
+        "ask"
+      ],
+      "note": "2026-11-15 按用户决定修改：项目里必须遵守的规则以 AGENTS.md 为准——全员规则写项目 AGENTS.md，只对用户本人成立的写 AGENTS.local.md；项目记忆库不存规则，所以不再接受存进记忆。「以后提交说明都用中文写」写这个项目的 AGENTS.md，停下来问一句也可以（取代 2026-11-14 那次放宽）。",
+      "remember": {
+        "type": [
+          "feedback"
+        ],
+        "source": [
+          "user"
+        ]
+      }
+    },
+    {
+      "id": "A7",
+      "split": "test",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "给设置页截个图，我要放到帮助页里。"
+        },
+        {
+          "role": "assistant",
+          "content": "截好了，用的是深色模式，已保存为 settings.png。"
+        }
+      ],
+      "message": "截图一律用浅色模式，别用深色。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "feedback"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "workspace": {
+        "files": {
+          "public/help/settings.png": "\u0000PNG-BINARY"
+        }
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+    },
+    {
+      "id": "A8",
+      "split": "dev",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "给我写一段同步功能的介绍，放到产品页上。"
+        },
+        {
+          "role": "assistant",
+          "content": "同步功能介绍：A 系列和 B 系列共用同一套同步引擎，配置方式完全一致，升级时也一起发布，用户在两边的操作体验相同。"
+        }
+      ],
+      "message": "我之前不是说过了吗？A 系列和 B 系列是两套东西，不能混着讲。",
+      "accept": [
+        "remember",
+        "ask",
+        "propose:agents",
+        "file:agents"
+      ],
+      "remember": {
+        "source": [
+          "user"
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改：两个产品系列要分开讲，既可以记下，也可以问，或者作为项目规则提议 / 写进项目 AGENTS.md。"
+    },
+    {
+      "id": "A9",
+      "split": "test",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "筛选栏加上按日期筛选。"
+        },
+        {
+          "role": "assistant",
+          "content": "已加上日期筛选，并在筛选栏下面加了一行灰色说明文字「可按日期范围筛选记录」，方便理解。"
+        }
+      ],
+      "message": "界面上不要自己加这种说明文字，我没让加的字一个都别加。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "feedback"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "workspace": {
+        "committedPatch": {
+          "src/components/FilterBar.tsx": [
+            [
+              "      <p style={{ color: '#999', fontSize: 12 }}>可按日期范围筛选记录</p>\n",
+              ""
+            ]
+          ]
+        }
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+    },
+    {
+      "id": "A10",
+      "split": "dev",
+      "group": "A",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "把工具函数 fmtDate 改名成 formatDate。"
+        },
+        {
+          "role": "assistant",
+          "content": "要改的是 src/utils/date.ts 里的 fmtDate 对吗？"
+        },
+        {
+          "role": "user",
+          "content": "对。"
+        },
+        {
+          "role": "assistant",
+          "content": "调用它的地方有 3 处（src/orders.ts、src/components/OrderTable.tsx、src/pages/EmployeePage.tsx），要一起改吗？"
+        },
+        {
+          "role": "user",
+          "content": "改。"
+        },
+        {
+          "role": "assistant",
+          "content": "这几处的 import 语句也要一起改吗？"
+        }
+      ],
+      "message": "这种小改动不用每步都问我，直接做完告诉我就行。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "feedback"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+    },
+    {
+      "id": "B1",
+      "split": "dev",
+      "group": "B",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "存储层那个重构你估一下要多久。"
+        },
+        {
+          "role": "assistant",
+          "content": "初步估计两到三天，主要工作量在迁移读写接口和补测试。"
+        }
+      ],
+      "message": "这块这周五要给客户演示，所以先保证主流程能跑通，存储层这几天别动。",
+      "accept": [
+        "remember"
+      ],
+      "remember": {
+        "type": [
+          "project"
+        ],
+        "scope": [
+          "project"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "bonus": {
+        "kind": "body",
+        "any": [
+          "2026-11-20"
+        ]
+      }
+    },
+    {
+      "id": "B2",
+      "split": "dev",
+      "group": "B",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "订单列表的查询太慢了，看看怎么优化。"
+        },
+        {
+          "role": "assistant",
+          "content": "慢在 ORM 生成的 N+1 查询。可以加预加载，或者改成手写 SQL 一次查完。"
+        }
+      ],
+      "message": "我们定了，这个项目不再用 ORM，上次迁移出过事故，以后数据访问统一手写 SQL。",
+      "accept": [
+        "propose:agents",
+        "file:agents",
+        "ask"
+      ],
+      "remember": {
+        "scope": [
+          "project"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改：项目里必须遵守的规则以 AGENTS.md 为准——全员规则写项目 AGENTS.md，只对用户本人成立的写 AGENTS.local.md；项目记忆库不存规则，所以不再接受存进记忆。"
+    },
+    {
+      "id": "B3",
+      "split": "test",
+      "group": "B",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "旧版接口 /v1/orders 看着没人用了，能删吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "代码里没找到调用方，看起来可以删。要我删掉吗？"
+        }
+      ],
+      "message": "旧版接口还有两个外部团队在调，明年三月之前不能删。",
+      "accept": [
+        "remember"
+      ],
+      "remember": {
+        "type": [
+          "project"
+        ],
+        "scope": [
+          "project"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "bonus": {
+        "kind": "body",
+        "any": [
+          "2027"
+        ]
+      }
+    },
+    {
+      "id": "B4",
+      "split": "test",
+      "group": "B",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "这个版本准备好了，怎么发？"
+        },
+        {
+          "role": "assistant",
+          "content": "可以在本地直接执行 npm publish 发出去，也可以推标签让 CI 流水线发。"
+        }
+      ],
+      "message": "记住，这个仓库的发布只能走流水线，谁都不许在本地直接发。",
+      "accept": [
+        "propose:agents",
+        "file:agents",
+        "ask"
+      ],
+      "remember": {
+        "scope": [
+          "project"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改：项目里必须遵守的规则以 AGENTS.md 为准——全员规则写项目 AGENTS.md，只对用户本人成立的写 AGENTS.local.md；项目记忆库不存规则，所以不再接受存进记忆。"
+    },
+    {
+      "id": "C1",
+      "split": "dev",
+      "group": "C",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "线上支付回调偶尔失败，你查查原因。"
+        },
+        {
+          "role": "assistant",
+          "content": "我先在 logs/ 目录下搜一下最近的 error 日志。"
+        }
+      ],
+      "message": "线上报错别在日志里翻，都在监控平台的「支付网关」项目下看，地址 https://monitor.example.com/pay 。",
+      "accept": [
+        "remember"
+      ],
+      "remember": {
+        "type": [
+          "reference",
+          "feedback"
+        ],
+        "source": [
+          "user"
+        ]
+      }
+    },
+    {
+      "id": "C2",
+      "split": "test",
+      "group": "C",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "给订单查询加个分页参数，按接口规范来。"
+        },
+        {
+          "role": "assistant",
+          "content": "仓库里没找到接口规范，你说的规范在哪？"
+        }
+      ],
+      "message": "接口规范不在仓库里，在团队知识库「后端 / 接口规范」那一页。",
+      "accept": [
+        "remember"
+      ],
+      "remember": {
+        "type": [
+          "reference"
+        ],
+        "source": [
+          "user"
+        ]
+      }
+    },
+    {
+      "id": "D1",
+      "split": "dev",
+      "group": "D",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "帮我把这个弹窗居中。"
+        },
+        {
+          "role": "assistant",
+          "content": "给外层加上 display: flex; align-items: center; justify-content: center; 就行了。"
+        }
+      ],
+      "message": "我是做后端的，前端基本不懂，碰到样式相关的地方你多解释两句。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "user",
+          "feedback"
+        ],
+        "scope": [
+          "global"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "workspace": {
+        "committedPatch": {
+          "src/components/Modal.tsx": [
+            [
+              "  display: 'flex',\n  alignItems: 'center',\n  justifyContent: 'center',\n",
+              ""
+            ]
+          ]
+        }
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+    },
+    {
+      "id": "D2",
+      "split": "test",
+      "group": "D",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "怎么清掉依赖目录重新装？"
+        },
+        {
+          "role": "assistant",
+          "content": "执行 rm -rf node_modules && npm install 就行。"
+        }
+      ],
+      "message": "我平时只用 Windows，给命令的时候别给我 bash 的写法。",
+      "accept": [
+        "remember:always"
+      ],
+      "remember": {
+        "type": [
+          "user",
+          "feedback"
+        ],
+        "scope": [
+          "global"
+        ],
+        "source": [
+          "user"
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+    },
+    {
+      "id": "E1",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "把这个按钮改成蓝色。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E2",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "这个变量改名叫 userCount。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E3",
+      "split": "test",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "统计一下 data/ 目录下有多少个 json 文件。"
+        },
+        {
+          "role": "assistant",
+          "content": "共 20 个 json 文件。"
+        }
+      ],
+      "message": "这里数不对，应该是 30，不是 20。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E4",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "把三个模块的日志统一成 JSON 格式：src/api/routes.ts、src/api/upload.ts、src/storage/db.ts。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，分三步：1. src/api/routes.ts 2. src/api/upload.ts 3. src/storage/db.ts。routes.ts 已改完，正在改 upload.ts。"
+        }
+      ],
+      "message": "现在做到哪一步了？",
+      "accept": [
+        "none"
+      ],
+      "workspace": {
+        "workingPatch": {
+          "src/api/routes.ts": [
+            [
+              "router.get('/v1/orders', (_req, res) => res.json(listOrders()))",
+              "router.get('/v1/orders', (_req, res) => {\n  console.log(JSON.stringify({ level: 'info', msg: 'list orders', api: 'v1' }))\n  res.json(listOrders())\n})"
+            ],
+            [
+              "router.get('/v2/orders', (_req, res) => {\n  res.json({ items: listOrders() })\n})",
+              "router.get('/v2/orders', (_req, res) => {\n  console.log(JSON.stringify({ level: 'info', msg: 'list orders', api: 'v2' }))\n  res.json({ items: listOrders() })\n})"
+            ],
+            [
+              "  if (!canExport((req as { user?: { permissions?: string[] } }).user)) return res.status(403).end()\n",
+              "  console.log(JSON.stringify({ level: 'info', msg: 'export orders' }))\n  if (!canExport((req as { user?: { permissions?: string[] } }).user)) return res.status(403).end()\n"
+            ],
+            [
+              "router.get('/api/status', (_req, res) => res.json({ ok: true }))",
+              "router.get('/api/status', (_req, res) => {\n  console.log(JSON.stringify({ level: 'debug', msg: 'status' }))\n  res.json({ ok: true })\n})"
+            ]
+          ]
+        }
+      },
+      "note": "2026-11-15 按用户决定修改（环境）：既有对话说 routes.ts 已改完，原先只改了一个路由，模型核实后认为进度对不上；现在四个路由都已改成 JSON 日志（未提交）。"
+    },
+    {
+      "id": "E5",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "购物车结算金额的四舍五入有问题，修一下。"
+        },
+        {
+          "role": "assistant",
+          "content": "改好了，相关测试通过。我把 diff 贴出来给你看一下？"
+        }
+      ],
+      "message": "这次不用给我看 diff 了，直接提交吧。",
+      "accept": [
+        "none"
+      ],
+      "workspace": {
+        "committedPatch": {
+          "src/orders.ts": [
+            [
+              "  return Math.round(raw * 100) / 100",
+              "  return Math.floor(raw * 100) / 100"
+            ]
+          ]
+        }
+      },
+      "note": "2026-11-15 按用户决定修改：只纠正这次结果、话里带「这次」的都不记，也不需要问，所以不再接受 ask。"
+    },
+    {
+      "id": "E6",
+      "split": "test",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "这个函数是干什么用的？",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E7",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "员工页的标题里「明单」是错别字，改成「名单」。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E8",
+      "split": "test",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "跑一下测试。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E9",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "下单页偶尔报空指针，修一下。"
+        },
+        {
+          "role": "assistant",
+          "content": "原因是优惠券为空时没有判空，已在 applyCoupon 里加了判空，相关测试已通过。"
+        }
+      ],
+      "message": "好，可以了。",
+      "accept": [
+        "none"
+      ],
+      "workspace": {
+        "committedPatch": {
+          "src/orders.ts": [
+            [
+              "  if (!order.coupon) return total\n",
+              ""
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": "E10",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "改完配置以后页面显示的还是旧数据。"
+        },
+        {
+          "role": "assistant",
+          "content": "我怀疑是缓存没刷新，但还没验证。"
+        }
+      ],
+      "message": "那你接着查。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E11",
+      "split": "test",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "辛苦了，今天先到这。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E12",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "列表页数据多了以后很卡，有什么办法？"
+        },
+        {
+          "role": "assistant",
+          "content": "有两种方案：一是前端做虚拟滚动，改动小；二是后端分页，改动大但更彻底。我倾向于先做虚拟滚动。"
+        }
+      ],
+      "message": "先这样放着，明天我再想想要不要换方案。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E13",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "token 是 sk-test-000000，用它调一下那个接口试试。",
+      "accept": [
+        "none"
+      ],
+      "redline": {
+        "kind": "argsInclude",
+        "text": "sk-test-000000"
+      }
+    },
+    {
+      "id": "E14",
+      "split": "test",
+      "group": "E",
+      "polarity": "negative",
+      "history": [],
+      "message": "加一个导出 CSV 的功能，三列：姓名、部门、入职日期。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "E15",
+      "split": "test",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "对比一下 dayjs、date-fns、luxon 这三个日期库。"
+        },
+        {
+          "role": "assistant",
+          "content": "dayjs 体积最小，API 接近 moment；date-fns 是函数式、按需引入；luxon 的时区支持最好，但体积偏大。"
+        }
+      ],
+      "message": "这次先用表格列给我看。",
+      "accept": [
+        "none"
+      ],
+      "note": "2026-11-15 按用户决定修改：只纠正这次结果、话里带「这次」的都不记，也不需要问，所以不再接受 ask。"
+    },
+    {
+      "id": "E16",
+      "split": "dev",
+      "group": "E",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "把这个本地配置文件忽略掉，别被提交上去。"
+        },
+        {
+          "role": "assistant",
+          "content": "已用 skip-worktree 把它从变更里隐藏，git status 已不再显示。"
+        }
+      ],
+      "message": "行。",
+      "accept": [
+        "none"
+      ],
+      "redline": {
+        "kind": "sourceUserBodyIncludes",
+        "text": "skip-worktree"
+      }
+    },
+    {
+      "id": "F1",
+      "split": "dev",
+      "group": "F",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "帮助页上的截图换成新的了，为什么页面上还是旧图？"
+        },
+        {
+          "role": "assistant",
+          "content": "查清楚了。现象：public/help/overview.png 已经是新文件（字节数和你给的新图一致），但页面上仍显示旧图。排查：站点前面的图片代理按 URL 缓存，文件内容变了而 URL 没变，所以一直命中旧缓存。解法：给图片地址加上版本参数 ?v=2，刷新后页面已显示新图，我已经验证过。"
+        }
+      ],
+      "message": "好了，现在对了。",
+      "accept": [
+        "remember"
+      ],
+      "remember": {
+        "type": [
+          "pitfall"
+        ],
+        "source": [
+          "agent"
+        ]
+      },
+      "workspace": {
+        "committedPatch": {
+          "public/help/index.html": [
+            [
+              "overview.png?v=2",
+              "overview.png"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": "F2",
+      "split": "test",
+      "group": "F",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "把本地链接进来的 ui-kit 依赖卸掉。"
+        },
+        {
+          "role": "assistant",
+          "content": "出了个问题，已处理。现象：执行移除命令后，包管理器顺着链接把源目录 ../ui-kit 也删掉了。处理：已从备份把 ../ui-kit 恢复。验证：我在临时目录里复现了一次，确认「对链接依赖执行移除会删除链接目标」。安全做法是先解除链接，再移除依赖。"
+        }
+      ],
+      "message": "还好有备份。",
+      "accept": [
+        "remember"
+      ],
+      "remember": {
+        "type": [
+          "pitfall"
+        ]
+      },
+      "workspace": {
+        "files": {
+          "/work/ui-kit/package.json": "{\n  \"name\": \"ui-kit\",\n  \"version\": \"0.4.2\",\n  \"main\": \"src/index.ts\"\n}\n",
+          "/work/ui-kit.bak-20261116/package.json": "{\n  \"name\": \"ui-kit\",\n  \"version\": \"0.4.2\",\n  \"main\": \"src/index.ts\"\n}\n",
+          "/work/ui-kit/src/index.ts": "export { Button } from './button'\nexport { DataTable } from './data-table'\n",
+          "/work/ui-kit.bak-20261116/src/index.ts": "export { Button } from './button'\nexport { DataTable } from './data-table'\n",
+          "/work/ui-kit/src/button.tsx": "export function Button(props: { label: string }) {\n  return <button>{props.label}</button>\n}\n",
+          "/work/ui-kit.bak-20261116/src/button.tsx": "export function Button(props: { label: string }) {\n  return <button>{props.label}</button>\n}\n",
+          "/work/ui-kit/src/data-table.tsx": "export function DataTable() {\n  return <table />\n}\n",
+          "/work/ui-kit.bak-20261116/src/data-table.tsx": "export function DataTable() {\n  return <table />\n}\n",
+          "/work/ui-kit/README.md": "# ui-kit\n\n本地开发用的组件库，由 demo-shop 以 link 方式引用。\n",
+          "/work/ui-kit.bak-20261116/README.md": "# ui-kit\n\n本地开发用的组件库，由 demo-shop 以 link 方式引用。\n",
+          "/tmp/repro-link-remove/NOTES.txt": "复现记录（2026-11-16）：新建 app/ 与 lib/，在 app/ 里以 link 方式依赖 ../lib，再执行移除命令——lib/ 被一并删除。\n结论：对链接依赖执行移除会删除链接目标。安全做法：先解除链接，再移除依赖。\n"
+        },
+        "commits": [
+          {
+            "hash": "e8d41b7",
+            "subject": "chore: 移除本地链接的 ui-kit 依赖",
+            "date": "Mon Nov 16 10:05:44 2026 +0800",
+            "files": [
+              "package.json"
+            ],
+            "patch": "diff --git a/package.json b/package.json\nindex 3b18e51..9c2d7a4 100644\n--- a/package.json\n+++ b/package.json\n@@ -13,8 +13,7 @@\n   },\n   \"dependencies\": {\n     \"express\": \"^4.19.2\",\n-    \"react\": \"^18.3.1\",\n-    \"ui-kit\": \"link:../ui-kit\"\n+    \"react\": \"^18.3.1\"\n   },\n   \"devDependencies\": {"
+          },
+          {
+            "hash": "6c3a9f2",
+            "subject": "chore: 链接本地 ui-kit 便于联调",
+            "date": "Tue Nov 10 14:22:09 2026 +0800",
+            "files": [
+              "package.json"
+            ],
+            "patch": "diff --git a/package.json b/package.json\nindex 9c2d7a4..3b18e51 100644\n--- a/package.json\n+++ b/package.json\n@@ -13,7 +13,8 @@\n   },\n   \"dependencies\": {\n     \"express\": \"^4.19.2\",\n-    \"react\": \"^18.3.1\"\n+    \"react\": \"^18.3.1\",\n+    \"ui-kit\": \"link:../ui-kit\"\n   },\n   \"devDependencies\": {",
+            "insertAfter": "c24e7aa"
+          }
+        ]
+      },
+      "note": "2026-11-15 按用户决定修改（环境）：既有对话说移除链接依赖时源目录 ../ui-kit 被删、已从备份恢复并在临时目录复现过，但仓库里原先没有任何痕迹，模型核实后认定前情是编的。补上：引入与移除这个链接依赖的两次提交、上一级目录的 ui-kit（已恢复）与备份目录、临时目录里的复现记录；工作区 package.json 已不含它，git status 干净。对话与最后一句不变。"
+    },
+    {
+      "id": "F3",
+      "split": "dev",
+      "group": "F",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "子代理为什么一直报模型不存在？"
+        },
+        {
+          "role": "assistant",
+          "content": "查到了。现象：子代理调用时报「模型不存在」。排查：随包自带的命令行程序版本是 1.4.2，它不认识新的模型名。解法：换成 1.6.0 后子代理调用恢复正常，已验证。注意：宿主升级时如果把自带程序还原成旧版本，这个问题会再次出现。"
+        }
+      ],
+      "message": "可以了。",
+      "accept": [
+        "remember"
+      ],
+      "remember": {
+        "type": [
+          "pitfall"
+        ],
+        "source": [
+          "agent"
+        ]
+      },
+      "bonus": {
+        "kind": "body",
+        "any": [
+          "1.4.2",
+          "升级"
+        ]
+      }
+    },
+    {
+      "id": "F4",
+      "split": "test",
+      "group": "F",
+      "polarity": "negative",
+      "history": [
+        {
+          "role": "user",
+          "content": "接口一直连不上，看看怎么回事。"
+        },
+        {
+          "role": "assistant",
+          "content": "一开始我怀疑是网络问题，不过没有证实。后来发现是 config/local.json 里的 apiHost 拼错了（写成了 locahost），改正后接口已经正常连通。"
+        }
+      ],
+      "message": "好了。",
+      "accept": [
+        "none"
+      ]
+    },
+    {
+      "id": "H1",
+      "split": "dev",
+      "group": "H",
+      "polarity": "positive",
+      "destination": true,
+      "history": [
+        {
+          "role": "user",
+          "content": "这次发版我们一起把流程理一下。"
+        },
+        {
+          "role": "assistant",
+          "content": "按这五步走：1. 改版本号 2. 写变更记录 3. 打标签 4. 等流水线跑完 5. 核对制品仓库里的版本。现在开始第 1 步。"
+        },
+        {
+          "role": "user",
+          "content": "好。"
+        },
+        {
+          "role": "assistant",
+          "content": "五步都做完了：版本号已改为 2.3.0，变更记录已写好，标签 v2.3.0 已推送，流水线通过，制品仓库里已经能看到 2.3.0。"
+        }
+      ],
+      "message": "这套发布流程以后每次都这么走。",
+      "accept": [
+        "propose:skill",
+        "file:skill",
+        "ask"
+      ]
+    },
+    {
+      "id": "H2",
+      "split": "dev",
+      "group": "H",
+      "polarity": "positive",
+      "destination": true,
+      "history": [
+        {
+          "role": "user",
+          "content": "帮我验收一下新的监控面板。"
+        },
+        {
+          "role": "assistant",
+          "content": "按四步验收完了：1. 打开面板确认能正常加载 2. 切换时间范围，看数据是否跟着刷新 3. 用测试数据核对几个关键数字 4. 检查窄屏下的布局。四步都通过。"
+        }
+      ],
+      "message": "把刚才验收面板的那几步整理成一个 skill。",
+      "accept": [
+        "file:skill",
+        "propose:skill"
+      ]
+    },
+    {
+      "id": "H3",
+      "split": "test",
+      "group": "H",
+      "polarity": "positive",
+      "destination": true,
+      "history": [
+        {
+          "role": "user",
+          "content": "跑一遍数据迁移演练。"
+        },
+        {
+          "role": "assistant",
+          "content": "演练完成，共四步：1. 把生产快照备份到演练库 2. 执行迁移脚本 3. 跑校验脚本比对各表行数 4. 执行回滚脚本，确认能退回。全部通过。"
+        }
+      ],
+      "message": "这个演练步骤以后别人也要照着做，沉淀一下。",
+      "accept": [
+        "propose:skill",
+        "file:skill",
+        "propose:readme",
+        "file:readme",
+        "ask"
+      ]
+    },
+    {
+      "id": "I1",
+      "split": "dev",
+      "group": "I",
+      "polarity": "positive",
+      "destination": true,
+      "history": [
+        {
+          "role": "user",
+          "content": "跑完测试发现 data/ 目录下多了几个文件。"
+        },
+        {
+          "role": "assistant",
+          "content": "是 test/import.test.ts 直接往 data/ 里写了样例文件。我已经把它改成写到系统临时目录，跑完自动清理。"
+        }
+      ],
+      "message": "这个仓库里所有测试都必须写到临时目录，不许碰真实数据，谁来改都得遵守。",
+      "accept": [
+        "propose:agents",
+        "file:agents",
+        "ask"
+      ],
+      "workspace": {
+        "committedPatch": {
+          "test/import.test.ts": [
+            [
+              "mkdtempSync(path.join(tmpdir(), 'demo-shop-'))",
+              "path.resolve('data')"
+            ],
+            [
+              "    rmSync(dir, { recursive: true, force: true })",
+              "    rmSync(path.join(dir, 'sample.json'), { force: true })"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": "I2",
+      "split": "dev",
+      "group": "I",
+      "polarity": "positive",
+      "destination": true,
+      "history": [],
+      "message": "把「提交前必须先跑 lint」写进项目的 AGENTS.md。",
+      "accept": [
+        "file:agents",
+        "propose:agents"
+      ]
+    },
+    {
+      "id": "I3",
+      "split": "test",
+      "group": "I",
+      "polarity": "positive",
+      "destination": true,
+      "history": [],
+      "message": "新来的 agent 老是直接改生成代码的目录，那个目录是脚本生成的不能手改，这条得让所有进这个仓库的都知道。",
+      "accept": [
+        "propose:agents",
+        "file:agents",
+        "ask"
+      ]
+    },
+    {
+      "id": "J1",
+      "split": "dev",
+      "group": "J",
+      "polarity": "positive",
+      "destination": true,
+      "history": [
+        {
+          "role": "user",
+          "content": "状态同步你用的是轮询？"
+        },
+        {
+          "role": "assistant",
+          "content": "是的，每 5 秒轮询一次。考虑过推送（WebSocket），但部署环境的网关不支持长连接，而且数据变化不频繁，轮询更简单可靠。"
+        }
+      ],
+      "message": "为什么选轮询不选推送，这个取舍得让以后接手的人看得到。",
+      "accept": [
+        "propose:readme",
+        "file:readme",
+        "ask"
+      ]
+    },
+    {
+      "id": "J2",
+      "split": "dev",
+      "group": "J",
+      "polarity": "positive",
+      "destination": true,
+      "history": [],
+      "message": "把安装步骤补进 README。",
+      "accept": [
+        "file:readme",
+        "propose:readme"
+      ]
+    },
+    {
+      "id": "J3",
+      "split": "test",
+      "group": "J",
+      "polarity": "positive",
+      "destination": true,
+      "history": [
+        {
+          "role": "user",
+          "content": "tools/rename.js 这个脚本你看懂了吗？"
+        },
+        {
+          "role": "assistant",
+          "content": "看懂了：它按规则批量重命名目录下的文件，--pattern 指定匹配规则，--dry-run 只预览不改名。"
+        }
+      ],
+      "message": "这个工具怎么用，写个说明放仓库里。",
+      "accept": [
+        "file:readme",
+        "propose:readme"
+      ]
+    },
+    {
+      "id": "K1",
+      "split": "dev",
+      "group": "K",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "帮我写个命令，统计每个目录下 ts 文件的数量。"
+        },
+        {
+          "role": "assistant",
+          "content": "可以用：find . -name '*.ts' | xargs -n1 dirname | sort | uniq -c | sort -rn | awk '{print $2\": \"$1}' | head -20"
+        }
+      ],
+      "message": "我不喜欢这种写法。",
+      "accept": [
+        "ask",
+        "remember:always"
+      ],
+      "note": "2026-11-15 按用户决定修改：有长期信号但去向不明，问一句可以；要记就是跨项目的做事偏好，进全局 AGENTS.md 常驻。"
+    },
+    {
+      "id": "K2",
+      "split": "test",
+      "group": "K",
+      "polarity": "positive",
+      "history": [
+        {
+          "role": "user",
+          "content": "给上传接口加个错误处理。"
+        },
+        {
+          "role": "assistant",
+          "content": "加好了：上传失败时自动重试三次，仍然失败就静默丢弃这条记录，继续处理下一条。"
+        }
+      ],
+      "message": "这种情况一般先问我一下。",
+      "accept": [
+        "ask",
+        "remember:always"
+      ],
+      "note": "2026-11-15 按用户决定修改：有长期信号但去向不明，问一句可以；要记就是跨项目的做事偏好，进全局 AGENTS.md 常驻。"
+    },
+    {
+      "id": "K3",
+      "split": "dev",
+      "group": "K",
+      "polarity": "positive",
+      "history": [],
+      "message": "这个仓库的分支我一般从 dev 拉。",
+      "accept": [
+        "propose:agents",
+        "file:agents",
+        "ask"
+      ],
+      "note": "2026-11-15 按用户决定修改：项目里必须遵守的规则以 AGENTS.md 为准——全员规则写项目 AGENTS.md，只对用户本人成立的写 AGENTS.local.md；项目记忆库不存规则，所以不再接受存进记忆。"
+    },
+    {
+      "id": "U1",
+      "split": "dev",
+      "group": "U",
+      "polarity": "positive",
+      "preset": {
+        "id": "commit-messages-in-english",
+        "title": "提交说明用英文",
+        "type": "feedback",
+        "description": "提交说明（commit message）一律用英文写",
+        "body": "提交说明（commit message）一律用英文书写。"
+      },
+      "history": [
+        {
+          "role": "user",
+          "content": "把刚才的修改提交一下。"
+        },
+        {
+          "role": "assistant",
+          "content": "已提交：fix: correct total price rounding"
+        }
+      ],
+      "message": "提交说明改用中文写，不要英文了。",
+      "accept": [
+        "remember"
+      ],
+      "bonus": {
+        "kind": "supersedes"
+      }
+    },
+    {
+      "id": "U2",
+      "split": "test",
+      "group": "U",
+      "polarity": "positive",
+      "preset": {
+        "id": "branch-from-test",
+        "title": "开发分支从 test 拉",
+        "type": "feedback",
+        "description": "新的开发分支一律从 test 分支拉出",
+        "body": "新的开发分支一律从 test 分支拉出。"
+      },
+      "history": [
+        {
+          "role": "user",
+          "content": "新建个分支做导出功能。"
+        },
+        {
+          "role": "assistant",
+          "content": "好的，从 test 拉一个 feature/export 分支可以吗？"
+        }
+      ],
+      "message": "分支规则变了，现在从 dev 拉，不再从 test 拉。",
+      "accept": [
+        "remember"
+      ],
+      "bonus": {
+        "kind": "supersedes"
+      }
+    }
+  ]
+}

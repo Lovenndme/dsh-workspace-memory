@@ -10,6 +10,7 @@
  *
  * 全部在临时目录里跑，不碰 ~/.dsh。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -195,19 +196,23 @@ section('recordHits：只改 hits / lastHit 两行')
   }
 }
 
-section('索引注入：超限要明说省略了多少条；空索引不注入')
+section('索引注入：超限要明说省略了多少条；空索引不注入（写入指引在系统提示段里）')
 {
   const host = makeHost(mod, { config: { maxMemoryCount: 0 } })
   try {
-    check('一条记忆都没有：不注入', host.contextText() === '')
+    // 2026-11-14 第二轮：写入指引移进 ctx.systemPrompt.section（MEMORY_SECTION），动态 context 只放索引。
+    // 所以空库又回到「不贡献任何文本」：空串，而不是一个只有首行的空壳（更不能带一个空的索引段）。
+    const nothing = (text) => text === ''
+    check('一条记忆都没有：context 是空串', nothing(host.contextText()), host.contextText())
 
     host.write(path.join(host.memoryDir, 'MEMORY.md'), '# Memory Index\n')
-    check('只有标题的索引：不注入', host.contextText() === '')
+    check('只有标题的索引：同样是空串', nothing(host.contextText()))
 
     await host.tool('memory_remember', { slug: 'tmp-one', title: 'Tmp', body: 'tmp body text', description: 'x' })
-    check('有条目就注入', host.contextText().includes('(tmp-one.md)'))
+    check('有条目就注入', host.contextText().includes('(tmp-one.md)') && host.contextText().includes('## 本工作区'))
+    check('  …文件自己的 # Memory Index 标题不进注入（一级标题不能落在二级小节下）', !host.contextText().includes('# Memory Index'))
     await host.tool('memory_forget', { id: 'tmp-one' })
-    check('删光之后重新不注入（不再每轮带一个空标题）', host.contextText() === '')
+    check('删光之后不再带一个空的索引段（回到空串）', nothing(host.contextText()))
 
     // 字节超限：描述写满 120 个汉字
     const cjk = '这是一条用来测试索引字节上限的中文摘要'.repeat(8).slice(0, 118)
@@ -216,7 +221,7 @@ section('索引注入：超限要明说省略了多少条；空索引不注入')
     }
     const maxBytes = 25 * 1024
     const injected = host.contextText()
-    const index = injected.slice(injected.indexOf('# Memory Index'))
+    const index = injected.slice(injected.indexOf('## 本工作区'))
     const listed = (index.match(/^- \[/gm) ?? []).length
     check('超过字节上限：确实截断了', listed < 80 && listed > 0, `列出 ${listed}/80`)
     const warning = /\[WARNING\] (\d+) of (\d+) memory entries are NOT listed above/.exec(index)
@@ -229,7 +234,7 @@ section('索引注入：超限要明说省略了多少条；空索引不注入')
     try {
       for (let i = 0; i < 70; i += 1) writeMemory(lines.memoryDir, { slug: `e-${String(i).padStart(3, '0')}`, title: `T${i}`, description: 's', body: `body ${i}`, type: 'project' })
       const text = lines.contextText()
-      const idx = text.slice(text.indexOf('# Memory Index'))
+      const idx = text.slice(text.indexOf('## 本工作区'))
       const shown = (idx.match(/^- \[/gm) ?? []).length
       check('超过行数上限：截断并写明省略条数', /\[WARNING\] (\d+) of 70 memory entries/.test(idx) && shown < 70, `列出 ${shown}`)
       check('  …整段索引（含警告）不超过行数上限', idx.split('\n').length <= 50, `${idx.split('\n').length} 行`)
@@ -256,7 +261,7 @@ section('预取段与索引拼接')
   const host = makeHost(mod, { config: { maxMemoryCount: 0, indexMaxLines: 50 } })
   try {
     for (let i = 0; i < 70; i += 1) writeMemory(host.memoryDir, { slug: `p-${String(i).padStart(3, '0')}`, title: `Topic ${i}`, description: `desc ${i}`, body: i === 3 ? 'zebra-quartz unique marker' : `body ${i}`, type: 'project' })
-    await host.fire('agent/pre-step', { agent: { id: 'agent-1' }, messages: [{ role: 'user', content: 'tell me about zebra-quartz unique marker' }], turn: 1 })
+    await host.fire('agent/pre-step', { agent: { id: 'agent-1' }, messages: [{ role: 'user', source: { kind: 'user' }, content: 'tell me about zebra-quartz unique marker' }], turn: 1 })
     const text = host.contextText()
     const warnAt = text.indexOf('[WARNING]')
     const prefetchAt = text.indexOf('[相关记忆]')

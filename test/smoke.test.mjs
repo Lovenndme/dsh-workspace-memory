@@ -4,6 +4,7 @@
  * 不依赖宿主，只验证模块可导入、纯函数行为正确、以及 leanvec 能否解析。
  * 需要临时目录时用 os.tmpdir()，跑完删掉。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

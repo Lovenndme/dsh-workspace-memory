@@ -5,6 +5,7 @@
  *   1. parseExtractionJson 对模型各种输出形态的容错
  *   2. pending → accept / reject 的状态流转（含索引与向量重建）
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

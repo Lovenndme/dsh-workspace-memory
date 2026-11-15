@@ -5,6 +5,7 @@
  *   · 历史：覆盖/删除前留档，误改能回退
  *   · hits/lastHit：被召回才算用过，为「哪条该淘汰」提供依据
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

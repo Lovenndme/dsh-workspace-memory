@@ -10,6 +10,7 @@
  * 门槛略低于实测值，留一条的余量——否则任何微小波动都会红，反而没人看。
  * 没有 leanvec 的机器会退化成纯关键词模式，召回天然更差，用放宽的门槛。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 const { runGolden } = await import('../eval/golden.mjs')
 
 let failures = 0

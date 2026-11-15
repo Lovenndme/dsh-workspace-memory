@@ -6,6 +6,7 @@
  *
  * 这里逐个字段验证拒绝行为——拒绝比接受更值得测，因为接受错了会静默写坏文件。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

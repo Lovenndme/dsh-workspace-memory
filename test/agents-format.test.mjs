@@ -9,6 +9,7 @@
  *
  * 全部使用隔离临时文件：configure({ agentsFile }) 指向临时路径，不读写真实的 ~/.dsh/AGENTS.md。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

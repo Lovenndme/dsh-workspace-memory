@@ -4,6 +4,7 @@
  * 全部使用**隔离临时数据**：临时记忆库 + 临时 AGENTS.md 文件，
  * 不读写真实的 ~/.dsh/AGENTS.md，也不动真实记忆库。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'

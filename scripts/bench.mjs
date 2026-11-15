@@ -12,14 +12,6 @@ import path from 'node:path'
 
 const mod = await import('../index.js')
 
-const realDir = path.join(
-  os.homedir(),
-  '.dsh',
-  'projects',
-  mod.encodeProjectPath('C:\\Users\\lenovo\\Documents\\DSH-Workspace'),
-  'memory',
-)
-
 function ms(fn) {
   const t0 = process.hrtime.bigint()
   const out = fn()
@@ -43,9 +35,10 @@ function buildStore(n) {
     mod.writeMemory(dir, {
       title: `基准测试记忆 ${i}`,
       body: `${body}\n\n编号 ${i}`,
-      type: ['user', 'feedback', 'project', 'reference'][i % 4],
+      type: ['user', 'feedback', 'project', 'reference', 'pitfall'][i % 5],
       tags: ['bench', `t${i % 7}`],
-      confidence: 0.8,
+      // 不再传 confidence：分流改为按来源（source），写入的记忆不带置信度
+      source: 'agent',
     })
   }
   return { tmp, dir }
@@ -100,8 +93,15 @@ console.log('\n=== 4. 向量索引体积（现在只在内存里） ===')
 
 console.log('\n=== 5. 注入路径（每步模型调用都会跑） ===')
 {
+  // 用临时库量，不读 ~/.dsh 下的真实记忆（以前读的是真实工作区的 MEMORY.md）
+  const { tmp, dir } = buildStore(5)
+  const index = path.join(dir, 'MEMORY.md')
   const runs = 20
   let total = 0
-  for (let i = 0; i < runs; i += 1) total += ms(() => readFileSync(path.join(realDir, 'MEMORY.md'), 'utf8')).ms
-  console.log(`  读 MEMORY.md 一次 ${(total / runs).toFixed(3)} ms（5 条 / 719 字节）`)
+  for (let i = 0; i < runs; i += 1) total += ms(() => readFileSync(index, 'utf8')).ms
+  console.log(`  读 MEMORY.md 一次 ${(total / runs).toFixed(3)} ms（5 条 / ${Buffer.byteLength(readFileSync(index, 'utf8'), 'utf8')} 字节）`)
+  let composed = 0
+  for (let i = 0; i < runs; i += 1) composed += ms(() => mod.composeInjection(dir, '')).ms
+  console.log(`  拼一次动态 context（composeInjection）${(composed / runs).toFixed(3)} ms`)
+  rmSync(tmp, { recursive: true, force: true })
 }

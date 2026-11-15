@@ -13,6 +13,7 @@
  * 注意：断言必须限定在 `[相关记忆]` 段内。索引本身会列出全部条目，
  * 拿整段文本去断言「无关条目不在里面」是错的。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -71,9 +72,10 @@ function makeEnv(config = {}) {
     get() { return undefined },
   }
 
-  mod.apply(ctx, { agentsFile: path.join(root, 'AGENTS.md'), prefetchRecall: true, ...config })
+  mod.apply(ctx, { agentsFile: path.join(root, 'AGENTS.md'), memoryDir: path.join(root, 'proj', 'memory'), globalMemoryDir: path.join(root, 'global', 'memory'), prefetchRecall: true, ...config })
 
-  const projectDir = path.join(os.homedir(), '.dsh', 'projects', mod.encodeProjectPath(workspace))
+  // 记忆库与全局按需库都放在临时目录（经 apply 传入），不碰 ~/.dsh
+  const projectDir = path.join(root, 'proj')
   const memoryDir = path.join(projectDir, 'memory')
 
   return {
@@ -104,9 +106,10 @@ function makeEnv(config = {}) {
 }
 
 const seed = (env, id, title, description, body) =>
-  mod.writeMemory(env.memoryDir, { slug: id, title, description, body, confidence: 0.9 })
+  mod.writeMemory(env.memoryDir, { slug: id, title, description, body })
 
-const userMessage = (text) => [{ role: 'user', content: text }]
+// 宿主送进 pre-step 的消息都带 source（真实宿主里必填）；没有 source 的消息不算人写的（第五轮）
+const userMessage = (text) => [{ role: 'user', source: { kind: 'user' }, content: text }]
 
 // 这条消息实测能过闸门（融合分 0.40）；换说法会掉到闸门以下，见金标集里 pos-npm-cadence 的已知未命中
 const HIT_MESSAGE = '发版的时候版本号应该什么时候改'

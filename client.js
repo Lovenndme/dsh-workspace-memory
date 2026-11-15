@@ -9,7 +9,11 @@
  * 数据通道是宿主 HTTP 路由（/api/dsh-workspace-memory/*），
  * 和工作区里 dsh-profile-stats 走同一条路。
  *
- * 关于 confidence：它是**模型自评**，不是用户判断，所以这里只读展示，不提供编辑。
+ * 关于 source / evidence：来源（用户原话 / 助手总结）与证据原话由宿主写入时记下，这里只读展示，不提供编辑。
+ * 旧文件里的 confidence 是**模型自评**，不是用户判断，同样只读展示（只在没有 source 的旧条目上出现）。
+ *
+ * 列表里是两个库（项目库 / 全局按需库）的条目，每条的 scope = 它所在的库；
+ * 保存 / 删除 / 写入 AGENTS.md 的请求都带上它，宿主据此定位，不用两个库都找。
  */
 
 window.__ModuleLoader__.load({
@@ -38,7 +42,7 @@ window.__ModuleLoader__.load({
     /** 分栏切换的宽度阈值：低于它退化成「列表 → 详情」。 */
     const SPLIT_MIN_WIDTH = 640
 
-    const TYPES = ['user', 'feedback', 'project', 'reference']
+    const TYPES = ['user', 'feedback', 'project', 'reference', 'pitfall']
 
     /* ---------------------------------------------------------------- 文案 */
 
@@ -76,13 +80,12 @@ window.__ModuleLoader__.load({
       'field.descriptionPlaceholder': '添加摘要',
       'field.type': '记忆分类',
       'field.scope': '适用范围',
+      'field.load': '加载方式',
       'field.tags': '记忆标签',
       'field.tagAdd': '添加',
       'field.tagPlaceholder': '标签，Enter 添加',
       'field.slug': '文件名（英文 slug）',
       'field.content': '正文',
-
-      'hint.scope': '适用范围；不会自动移动文件',
 
       'confidence.label': '模型自评',
       'confidence.readonly': '由模型在写入时给出的自评，不是正确率',
@@ -91,11 +94,19 @@ window.__ModuleLoader__.load({
       'confidence.mid': '中等',
       'confidence.low': '偏低',
 
+      'source.user': '用户原话',
+      'source.unverified': '未核实',
+      'source.agent': '助手总结',
+
       'scope.project': '仅本项目',
       'scope.global': '跨项目',
       'scope.short': '跨项目',
       'scope.local': '记忆库',
       'scope.agents': 'AGENTS.md',
+
+      'load.always': '常驻',
+      'load.on-demand': '按需',
+
       'agents.chapters': '{count} 章',
       'agents.empty': 'AGENTS.md 里还没有章节',
       'agents.add': '新增章节',
@@ -124,8 +135,9 @@ window.__ModuleLoader__.load({
       'state.saveFailed': '保存失败',
       'state.refreshed': '列表已刷新',
       'state.accepted': '已收下',
+      'state.acceptedReplaceFailed': '已收下，但旧记忆 {id} 未能删除',
       'state.rejected': '已丢弃',
-      'state.promoted': '已写入 AGENTS.md，并从项目库移出',
+      'state.promoted': '已写入 AGENTS.md，并从记忆库移出',
       'state.deleted': '已删除',
       'state.opened': '已用 {app} 打开',
 
@@ -148,8 +160,12 @@ window.__ModuleLoader__.load({
       'error.load': '读取记忆失败',
       'error.save': '保存被拒绝',
 
-      'pending.on': '暂无待确认记忆。模型自评置信度不足的记忆会进到这里，也可以手动 /memory extract。',
-      'pending.off': '暂无待确认记忆。模型自评置信度不足的记忆会进到这里；自动抽取未开启时也可手动 /memory extract。',
+      'pending.on': '暂无待确认记忆。助手自己总结的记忆会进到这里，也可以手动 /memory extract。',
+      'pending.off': '暂无待确认记忆。助手自己总结的记忆会进到这里；自动抽取未开启时也可手动 /memory extract。',
+      'pending.replaceChapter': '替换第 {chapter} 章',
+      'pending.newChapter': '新章',
+      'pending.sectionMoved': '要替换的章节已变动，未写入',
+      'pending.replacesMemory': '替换记忆 {id}',
 
       'detail.breadcrumb': '记忆详情',
       'detail.choose': '选择一条记忆',
@@ -173,13 +189,13 @@ window.__ModuleLoader__.load({
       'guard.savePromote': '保存后写入',
 
       'confirm.promoteTitle': '写入全局 AGENTS.md？',
-      'confirm.promote': '会把这一条追加到 ~/.dsh/AGENTS.md，并从本项目记忆库中移除（历史里保留一份可回退）。AGENTS.md 每个会话都会加载。',
+      'confirm.promote': '会把这一条追加到 ~/.dsh/AGENTS.md，并从记忆库中移除（历史里保留一份可回退）。AGENTS.md 每个会话都会加载。',
       'confirm.promoteOk': '确认写入',
       'confirm.deleteTitle': '删除这条记忆？',
-      'confirm.delete': '会从本项目的记忆库里移除这条记忆。历史里会保留一份副本，可回退。',
+      'confirm.delete': '会从记忆库里移除这条记忆。历史里会保留一份副本，可回退。',
       'confirm.deleteOk': '删除',
 
-      'promote.hint': '写入全局 AGENTS.md，并从项目库移出',
+      'promote.hint': '写入全局 AGENTS.md，并从记忆库移出',
       'promote.failed': '操作失败',
 
       // 宿主返回的失败原因码 → 人话（reasonText 只认这里列出的码，未知码不外露）
@@ -199,11 +215,20 @@ window.__ModuleLoader__.load({
       'reason.read-failed': '读取 AGENTS.md 失败',
       'reason.write-failed': '写入 AGENTS.md 失败',
       'reason.launch-failed': '无法启动编辑器',
+      'reason.invalid-scope': '适用范围不合法',
+      'reason.scope-ambiguous': '两个记忆库里都有这个 id 的记忆',
+      'reason.target-exists': '目标记忆库里已有同名记忆',
+      'reason.belongs-in-project-agents': '只在本项目常驻的规则应写进项目自己的 AGENTS.md',
+      'reason.same-library': '已经在这个记忆库里',
+      'reason.partially-saved': '已移库，但其余修改未保存',
+      'reason.move-failed': '移库未完成，已恢复原状',
+      'reason.move-partial': '移库未完成，两个库里各有一份',
 
       'type.user': '用户偏好',
       'type.feedback': '纠正反馈',
       'type.project': '项目决策',
       'type.reference': '参考索引',
+      'type.pitfall': '踩坑经验',
     }
 
     const EN = {
@@ -240,13 +265,12 @@ window.__ModuleLoader__.load({
       'field.descriptionPlaceholder': 'Add a summary',
       'field.type': 'Category',
       'field.scope': 'Scope',
+      'field.load': 'Load',
       'field.tags': 'Tags',
       'field.tagAdd': 'Add',
       'field.tagPlaceholder': 'Tag, Enter to add',
       'field.slug': 'File name (English slug)',
       'field.content': 'Content',
-
-      'hint.scope': 'Scope only; files are never moved automatically',
 
       'confidence.label': 'Model self-assessment',
       'confidence.readonly': 'Written by the model; not an accuracy figure',
@@ -255,11 +279,19 @@ window.__ModuleLoader__.load({
       'confidence.mid': 'medium',
       'confidence.low': 'low',
 
+      'source.user': "User's words",
+      'source.unverified': 'Unverified',
+      'source.agent': 'Assistant summary',
+
       'scope.project': 'This project',
       'scope.global': 'Cross-project',
       'scope.short': 'Cross-project',
       'scope.local': 'Library',
       'scope.agents': 'AGENTS.md',
+
+      'load.always': 'Always on',
+      'load.on-demand': 'On demand',
+
       'agents.chapters': '{count} chapters',
       'agents.empty': 'AGENTS.md has no chapters yet',
       'agents.add': 'Add chapter',
@@ -288,8 +320,9 @@ window.__ModuleLoader__.load({
       'state.saveFailed': 'Save failed',
       'state.refreshed': 'List refreshed',
       'state.accepted': 'Accepted',
+      'state.acceptedReplaceFailed': 'Accepted, but the old memory {id} could not be deleted',
       'state.rejected': 'Discarded',
-      'state.promoted': 'Written to AGENTS.md and removed from the project library',
+      'state.promoted': 'Written to AGENTS.md and removed from the memory library',
       'state.deleted': 'Deleted',
       'state.opened': 'Opened with {app}',
 
@@ -312,8 +345,12 @@ window.__ModuleLoader__.load({
       'error.load': 'Could not load memories',
       'error.save': 'Save rejected',
 
-      'pending.on': 'No pending memories. Low-confidence model writes land here, and /memory extract adds more.',
-      'pending.off': 'No pending memories. Low-confidence model writes land here; you can also run /memory extract manually.',
+      'pending.on': 'No pending memories. Memories the assistant worked out itself land here, and /memory extract adds more.',
+      'pending.off': 'No pending memories. Memories the assistant worked out itself land here; you can also run /memory extract manually.',
+      'pending.replaceChapter': 'Replaces chapter {chapter}',
+      'pending.newChapter': 'New chapter',
+      'pending.sectionMoved': 'The chapter to replace has changed; nothing was written',
+      'pending.replacesMemory': 'Replaces memory {id}',
 
       'detail.breadcrumb': 'Memory detail',
       'detail.choose': 'Select a memory',
@@ -337,13 +374,13 @@ window.__ModuleLoader__.load({
       'guard.savePromote': 'Save and write',
 
       'confirm.promoteTitle': 'Write to the global AGENTS.md?',
-      'confirm.promote': 'This appends the memory to ~/.dsh/AGENTS.md and removes it from this project library (a history copy stays and can be restored). AGENTS.md is loaded in every session.',
+      'confirm.promote': 'This appends the memory to ~/.dsh/AGENTS.md and removes it from the memory library (a history copy stays and can be restored). AGENTS.md is loaded in every session.',
       'confirm.promoteOk': 'Write it',
       'confirm.deleteTitle': 'Delete this memory?',
-      'confirm.delete': 'This removes the memory from this project library. A history copy is kept and can be restored.',
+      'confirm.delete': 'This removes the memory from the memory library. A history copy is kept and can be restored.',
       'confirm.deleteOk': 'Delete',
 
-      'promote.hint': 'Write to the global AGENTS.md and remove it from the project library',
+      'promote.hint': 'Write to the global AGENTS.md and remove it from the memory library',
       'promote.failed': 'Operation failed',
 
       'reason.invalid-id': 'Invalid memory id',
@@ -362,11 +399,20 @@ window.__ModuleLoader__.load({
       'reason.read-failed': 'Could not read AGENTS.md',
       'reason.write-failed': 'Could not write AGENTS.md',
       'reason.launch-failed': 'Could not launch the editor',
+      'reason.invalid-scope': 'Invalid scope',
+      'reason.scope-ambiguous': 'Both libraries have a memory with this id',
+      'reason.target-exists': 'The target library already has a memory with this name',
+      'reason.belongs-in-project-agents': "An always-on rule for one project belongs in that project's AGENTS.md",
+      'reason.same-library': 'Already in this library',
+      'reason.partially-saved': 'Moved to the other library, but the other changes were not saved',
+      'reason.move-failed': 'The move did not complete and was rolled back',
+      'reason.move-partial': 'The move did not complete; both libraries now hold a copy',
 
       'type.user': 'User preference',
       'type.feedback': 'Feedback',
       'type.project': 'Project decision',
       'type.reference': 'Reference',
+      'type.pitfall': 'Pitfall',
     }
 
 
@@ -523,7 +569,12 @@ window.__ModuleLoader__.load({
 .wsm-detail-title:hover, .wsm-description:hover { background: var(--dsw-alias-bg-layer-1); }
 .wsm-property-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 12px; margin-top: 17px; }
 .wsm-property-row .wsm-select { background: var(--dsw-alias-bg-layer-1); }
+/* 详情里的「替换记忆」标签：字号与颜色照抄列表卡片的 .wsm-badges；id 可能很长，允许折行 */
+.wsm-property-row .wsm-badge { font-size: 11px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
 .wsm-confidence { margin: 0 0 0 auto; color: var(--dsw-alias-label-secondary); font-size: 12px; white-space: nowrap; }
+/* 来源行带着用户原话时可能很长（宿主不截断）：允许折行，否则会被详情区的 overflow-x: hidden 截掉；
+   高度上限沿用 .wsm-description 的 76px，免得把编辑区推下去 */
+.wsm-confidence.wsm-evidence { white-space: normal; overflow-wrap: anywhere; max-height: 76px; overflow-y: auto; }
 .wsm-tags-field { margin-top: 12px; }
 .wsm-tags, .wsm-tag-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .wsm-tag-chips:empty { display: none; }
@@ -927,6 +978,16 @@ window.__ModuleLoader__.load({
       'read-failed',
       'write-failed',
       'launch-failed',
+      // 两个库之后新增：save / forget / promote 的 scope 参数、换库、收下「本项目常驻」草稿
+      'invalid-scope',
+      'scope-ambiguous',
+      'target-exists',
+      'belongs-in-project-agents',
+      'same-library',
+      // 面板保存换库：换库成功而其余字段没写成 / 换库本身失败并已回滚 / 回滚也失败、两个库各留一份
+      'partially-saved',
+      'move-failed',
+      'move-partial',
     ]
 
     /**
@@ -947,6 +1008,30 @@ window.__ModuleLoader__.load({
       return fallback
     }
 
+    /**
+     * 来源标签的文案键。模型声称 `source: user` 不等于真是用户说的：只有宿主核对到证据（evidenceVerified === true）
+     * 才显示「用户原话」，否则（false 或旧数据没有这个键）显示「未核实」——审常驻草稿时不能把模型编的「原话」当真。
+     * 已确认条目与草稿同一套规则。没有来源返回 null。
+     */
+    function sourceKey(memory) {
+      if (memory?.source === 'agent') return 'source.agent'
+      if (memory?.source === 'user') return memory.evidenceVerified === true ? 'source.user' : 'source.unverified'
+      return null
+    }
+
+    /**
+     * 待确认草稿「替换记忆 {id}」标签的文字；没有 supersedes 返回空串。
+     * 常驻草稿收下时宿主会把这条旧记忆归档删除，所以点「收下」之前就得看得到。
+     * 旧记忆在另一个库（supersedesScope ≠ 草稿的 scope）时，后面补上那个库，复用页脚已有的「跨项目 / 本项目」词条。
+     */
+    function supersedesText(memory) {
+      const id = typeof memory?.supersedes === 'string' ? memory.supersedes.trim() : ''
+      if (!id) return ''
+      const label = t('pending.replacesMemory', { id })
+      const where = memory.supersedesScope === 'global' || memory.supersedesScope === 'project' ? memory.supersedesScope : ''
+      if (!where || where === memory.scope) return label
+      return `${label} · ${where === 'global' ? t('scope.global') : t('file.location')}`
+    }
 
     /* --------------------------------------------------- 命令卡：/memory */
 
@@ -1095,6 +1180,8 @@ window.__ModuleLoader__.load({
         replaceMemory,
         removeMemory,
         reasonText,
+        sourceKey,
+        supersedesText,
         toDraft,
         KNOWN_REASONS,
         dictionaries: { ZH, EN },
@@ -1440,6 +1527,17 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'wsm-badges' },
           h('span', { className: `wsm-badge t-${memory.type}` }, typeLabel(memory.type)),
+          // 收下后会进每轮常驻的 AGENTS.md：列表上就标出来。已确认条目都在按需库里（load 恒为 on-demand），不会出现
+          memory.load === 'always' ? h('span', { className: 'wsm-badge' }, t('load.always')) : null,
+          // 收下后动 AGENTS.md 的哪一章：带章号（且不是 newChapter）就是覆盖那一章，否则追加新章（与宿主 acceptPending 同口径）；
+          // 悬停显示入队时那一章的标题
+          memory.load === 'always'
+            ? Number.isInteger(memory.chapter) && memory.chapter > 0 && memory.newChapter !== true
+              ? h('span', { className: 'wsm-badge', title: memory.chapterTitle || undefined }, t('pending.replaceChapter', { chapter: memory.chapter }))
+              : h('span', { className: 'wsm-badge' }, t('pending.newChapter'))
+            : null,
+          // 收下时会归档删除的旧记忆（只有草稿带 supersedes）
+          supersedesText(memory) ? h('span', { className: 'wsm-badge' }, supersedesText(memory)) : null,
           selected && dirty ? h('span', { className: 'wsm-item-dirty' }, t('meta.unsavedShort')) : null,
           memory.scope === 'global' ? h('span', { className: 'wsm-badge t-global' }, t('scope.short')) : null,
         ),
@@ -1498,7 +1596,10 @@ window.__ModuleLoader__.load({
 
       // 待确认草稿只能收下或丢弃：宿主没有「改草稿」的接口，编辑了也存不下来
       const editable = !doc.saving && !isPending
-      const canPromote = !isPending && draft.scope === 'global'
+      // 按条目已保存的位置判断（不看下拉里未保存的值）：全局库里的，或宿主标了 promotable 的旧条目
+      const canPromote = !isPending && (memory.scope === 'global' || memory.promotable === true)
+      // 已确认条目所在的库；待确认草稿实际放在本项目的队列里，仍按本项目显示
+      const inGlobal = !isPending && memory.scope === 'global'
       // 标题/摘要是 frontmatter 单行字段：拦住回车（输入法组字中的回车除外），粘贴的换行也压平
       const blockEnter = (event) => {
         if (event.key === 'Enter' && !isImeEvent(event)) event.preventDefault()
@@ -1590,7 +1691,6 @@ window.__ModuleLoader__.load({
                     className: 'wsm-select',
                     value: draft.scope,
                     disabled: !editable,
-                    title: t('hint.scope'),
                     ...errorProp('scope'),
                     onChange: (event) => onField('scope', event.target.value),
                   },
@@ -1599,13 +1699,38 @@ window.__ModuleLoader__.load({
                 ),
                 fieldError('scope'),
               ),
-              h(
-                'p',
-                { className: 'wsm-confidence', title: t('confidence.readonly') },
-                `${t('confidence.label')} ${Number(memory.confidence ?? 0).toFixed(2)} · ${confidenceTone(
-                  memory.confidence ?? 0,
-                )} · ${t('confidence.readonlyShort')}`,
-              ),
+              // 草稿收下后的加载方式；与上面两个下拉一样在待确认页只读。已确认条目都在按需库里，不显示
+              isPending
+                ? h(
+                    'div',
+                    { className: 'wsm-field' },
+                    h('label', { className: 'wsm-sr-only', htmlFor: 'wsm-load' }, t('field.load')),
+                    h(
+                      'select',
+                      { id: 'wsm-load', className: 'wsm-select', value: memory.load === 'always' ? 'always' : 'on-demand', disabled: true },
+                      h('option', { value: 'on-demand' }, t('load.on-demand')),
+                      h('option', { value: 'always' }, t('load.always')),
+                    ),
+                  )
+                : null,
+              // 去向旁边：收下时会归档删除的旧记忆（与列表卡片同一个标签）
+              isPending && supersedesText(memory) ? h('span', { className: 'wsm-badge' }, supersedesText(memory)) : null,
+              // 有来源就显示来源（及证据原文）；没有来源但有旧 confidence 的才显示原来那一行
+              sourceKey(memory)
+                ? h(
+                    'p',
+                    { className: memory.evidence ? 'wsm-confidence wsm-evidence' : 'wsm-confidence' },
+                    memory.evidence ? `${t(sourceKey(memory))} · “${memory.evidence}”` : t(sourceKey(memory)),
+                  )
+                : Number.isFinite(memory.confidence)
+                  ? h(
+                      'p',
+                      { className: 'wsm-confidence', title: t('confidence.readonly') },
+                      `${t('confidence.label')} ${memory.confidence.toFixed(2)} · ${confidenceTone(
+                        memory.confidence,
+                      )} · ${t('confidence.readonlyShort')}`,
+                    )
+                  : null,
             ),
             h(TagEditor, {
               tags: draft.tags,
@@ -1688,7 +1813,7 @@ window.__ModuleLoader__.load({
                 'aria-expanded': fileOpen,
                 onClick: onToggleFile,
               },
-              h('span', { className: 'wsm-file-location' }, t('file.location')),
+              h('span', { className: 'wsm-file-location' }, inGlobal ? t('scope.global') : t('file.location')),
               h('span', { className: 'wsm-file-slash', 'aria-hidden': 'true' }, '/'),
               h('span', { className: 'file' }, `${draft.slug}.md`),
             ),
@@ -1801,7 +1926,7 @@ window.__ModuleLoader__.load({
               'dl',
               { className: 'wsm-file-facts' },
               h('dt', null, t('file.storage')),
-              h('dd', null, t('file.storageValue')),
+              h('dd', null, inGlobal ? t('scope.global') : t('file.storageValue')),
               h('dt', null, t('meta.updated')),
               h('dd', null, formatTime(memory.modified)),
             ),
@@ -2516,6 +2641,8 @@ window.__ModuleLoader__.load({
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               id: targetId,
+              // 条目现在所在的库（基线 = 最近一次保存后的状态）；patch.scope 与它不同时宿主会把条目移到另一个库
+              scope: current.baseline?.scope,
               patch: {
                 slug: current.draft.slug,
                 title: current.draft.title,
@@ -2529,11 +2656,28 @@ window.__ModuleLoader__.load({
           })
           const payload = await response.json().catch(() => ({}))
           if (!response.ok || !payload.ok) {
-            const message =
-              Array.isArray(payload.errors) && payload.errors.length
-                ? payload.errors.join('\n')
+            const errors = Array.isArray(payload.errors) ? payload.errors.filter((item) => typeof item === 'string' && item) : []
+            // 认得的原因码先翻成人话、宿主的细节附在后面；否则 partially-saved 这类同时带 errors 的失败只会露出宿主原文
+            const known = typeof payload.reason === 'string' && KNOWN_REASONS.includes(payload.reason)
+            const message = known
+              ? [reasonText(payload, t('error.save')), ...errors].join('\n')
+              : errors.length
+                ? errors.join('\n')
                 : reasonText(payload, t('error.save'))
-            setDoc((prev) => (prev.id === targetId ? { ...prev, status: 'error', saveError: message } : prev))
+            // 失败但已经换了库（partially-saved）：条目现在在 payload.scope 那个库。基线的所在库跟着改，
+            // 下次保存才不会发到旧库；其余字段没存上，草稿保持未保存状态，用户可以直接再存一次
+            const movedTo = payload.moved === true && (payload.scope === 'global' || payload.scope === 'project') ? payload.scope : null
+            setDoc((prev) =>
+              prev.id === targetId
+                ? {
+                    ...prev,
+                    status: 'error',
+                    saveError: message,
+                    ...(movedTo && prev.baseline ? { baseline: { ...prev.baseline, scope: movedTo } } : {}),
+                  }
+                : prev,
+            )
+            if (movedTo) void load({ silent: true })
             return false
           }
 
@@ -2557,8 +2701,8 @@ window.__ModuleLoader__.load({
             }
           })
           if (landedId !== targetId && selectedIdRef.current === targetId) setSelectedId(landedId)
-          // 排序可能因改名而变；回读不到记忆时也要靠整表刷新对齐
-          if (landedId !== targetId || !memory) void load({ silent: true })
+          // 排序可能因改名或换库而变；回读不到记忆时也要靠整表刷新对齐
+          if (landedId !== targetId || !memory || payload.moved) void load({ silent: true })
           showToast(t('state.saved'))
           return true
         } catch (error) {
@@ -2699,7 +2843,12 @@ window.__ModuleLoader__.load({
                 ...prev,
                 saving: false,
                 status: 'error',
-                saveError: reasonText(payload, t('promote.failed')),
+                // reason.section-moved 是给 AGENTS.md 章节编辑器的（「已重新读取」）；收下草稿时它的意思是
+                // 要覆盖的那一章编号漂移了、什么都没写，单独一句
+                saveError:
+                  endpoint === ACCEPT_URL && payload.reason === 'section-moved'
+                    ? t('pending.sectionMoved')
+                    : reasonText(payload, t('promote.failed')),
               }))
               return
             }
@@ -2709,7 +2858,16 @@ window.__ModuleLoader__.load({
             setView('list')
             void load({ silent: true })
             if (endpoint === ACCEPT_URL) void loadAgents()
-            showToast(endpoint === ACCEPT_URL ? t('state.accepted') : t('state.rejected'))
+            // 收下本身成功、但被取代的旧记忆没删掉（replaceFailed）：在同一个底部提示里点名它，留给人手动处理。
+            // replaced / replacedMissing 不另提示：上面的刷新之后列表里自然可见
+            const replaceFailed = endpoint === ACCEPT_URL && typeof payload.replaceFailed === 'string' && payload.replaceFailed ? payload.replaceFailed : ''
+            showToast(
+              endpoint === ACCEPT_URL
+                ? replaceFailed
+                  ? t('state.acceptedReplaceFailed', { id: replaceFailed })
+                  : t('state.accepted')
+                : t('state.rejected'),
+            )
           } catch (error) {
             setDoc((prev) => ({ ...prev, saving: false, status: 'error', saveError: error?.message ?? String(error) }))
           }
@@ -2750,12 +2908,15 @@ window.__ModuleLoader__.load({
       const doPromote = useCallback(async () => {
         if (!selected) return
         const targetId = selected.id
+        // 「保存后写入」可能刚换过库：selected 是点击时的快照，以文档基线（最近一次保存后的位置）为准
+        const current = docRef.current
+        const library = current.id === targetId && current.baseline ? current.baseline.scope : selected.scope
         setDoc((prev) => ({ ...prev, saving: true, saveError: '', status: '' }))
         try {
           const response = await fetch(`${PROMOTE_URL}?session=${encodeURIComponent(sessionId)}`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: targetId }),
+            body: JSON.stringify({ id: targetId, scope: library }),
           })
           const payload = await response.json().catch(() => ({}))
           if (!response.ok || !payload.ok) {
@@ -2811,7 +2972,7 @@ window.__ModuleLoader__.load({
           const response = await fetch(`${FORGET_URL}?session=${encodeURIComponent(sessionId)}`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: targetId }),
+            body: JSON.stringify({ id: targetId, scope: selected.scope }),
           })
           const payload = await response.json().catch(() => ({}))
           if (!response.ok || !payload.ok) {
@@ -3052,7 +3213,8 @@ window.__ModuleLoader__.load({
                         )
                       : visible.map((memory, index) =>
                           h(MemoryListItem, {
-                            key: memory.id,
+                            // 两个库可能各有一条同 id 的记忆：key 带上所在的库，避免 React 键冲突
+                            key: `${memory.scope}:${memory.id}`,
                             memory: {
                               ...memory,
                               draftTitle: memory.id === selectedId ? doc.draft?.title : undefined,
@@ -3263,7 +3425,8 @@ window.__ModuleLoader__.load({
         try {
           const locale = ctx.get('locale')
           const snapshot = locale?.getLocale?.()
-          const language = snapshot?.locale ?? snapshot?.id ?? ''
+          // dsh-client-locale 的快照是 { active, locales, revision }：当前语言在 active 里（locale / id 是旧猜测，留作兼容）
+          const language = snapshot?.active ?? snapshot?.locale ?? snapshot?.id ?? ''
           if (/^en\b/i.test(String(language))) dict = EN
 
           if (locale?.register) {
@@ -3274,10 +3437,13 @@ window.__ModuleLoader__.load({
               } catch (error) {
                 console.error('[workspace-memory] locale.register(en) 失败', error)
               }
+              // 内置中文的语言 id 是 `zh`（回落链 zh → en），不是 `zh-CN`：`zh-CN` 只出现在 <html lang> 上。
+              // 以前注册在 zh-CN 下，中文界面查 NS 时 zh 落空、回落到 en，于是中文用户看到英文。
+              // 以 zh 注册后，回落链经过 zh 的 zh-* 语言包也能取到中文。
               try {
-                disposers.push(locale.register(NS, 'zh-CN', ZH))
+                disposers.push(locale.register(NS, 'zh', ZH))
               } catch (error) {
-                console.error('[workspace-memory] locale.register(zh-CN) 失败', error)
+                console.error('[workspace-memory] locale.register(zh) 失败', error)
               }
               return () => {
                 for (const dispose of disposers) {

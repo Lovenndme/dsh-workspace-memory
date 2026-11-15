@@ -11,8 +11,14 @@
  *   precision = TP / (TP + FP)   记下来的里面有多少是真的
  *   recall    = TP / (TP + FN)   该记的记住了多少
  *
- * 同时报告「加上 minExtractConfidence 闸门之后」的两个数字，
- * 用来判断这个闸门到底帮忙还是帮倒忙。
+ * 计分口径与插件现在的抽取行为一致（第六轮起）：
+ *   · 候选**全部入队**，不因证据核对不过而丢弃（插件的 extractFromTurn 只做去重，核对结果存进 evidenceVerified）；
+ *   · source: "user" 的候选做与插件相同的核对：原话出处（verifyEvidence，同一条用户消息内按序匹配）
+ *     **且** 与这条记忆的文字沾边（evidenceRelates，比 [标题, 摘要, 正文]）。两道都过 = 「入队（已核实）」，
+ *     否则 = 「入队（未核实）」——面板据此显示「用户原话」或「未核实」；
+ *   · source: "agent" 或没标 source 的（插件按 agent 处理）= 「入队（agent）」。
+ * 所以 precision / recall 报两组：全部入队的候选（插件实际放进队列的），以及其中「已核实」的那部分
+ * （面板标成「用户原话」的条目有多准、覆盖了多少应记项）。另分开报三类入队的条数。
  *
  * 用法：
  *   node eval/run.mjs
@@ -32,7 +38,6 @@ const argOf = (name, fallback) => {
 const KEY_ENV = argOf('key-env', 'MYAPI_API_KEY')
 const BASE = argOf('base', 'https://api.wwaihh.xyz/v1')
 const MODEL = argOf('model', 'deepseek-v4.1-flash')
-const MIN_CONF = Number(argOf('min-conf', '0.6'))
 const FILE = argOf('file', 'snippets.json')
 
 /** 从 ~/.dsh/.credentials.yaml 里按行取出 key（格式是 `  NAME: value`）。 */
@@ -93,8 +98,29 @@ function matches(candidate, expectation) {
   return expectation.must.every((kw) => hay.includes(String(kw).toLowerCase()))
 }
 
+/** 语料里「用户：」开头的每一行当作一条用户消息（与插件证据核对的口径一致：同一条消息内按序匹配）。 */
+const userLinesOf = (snippet) =>
+  String(snippet)
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('用户：'))
+    .map((line) => line.slice('用户：'.length))
+
+/**
+ * 与 extractFromTurn 相同的分类（插件不丢弃任何一类，只决定入队时的 evidenceVerified）：
+ *   'verified'   source: "user"，原话核对得到且与这条记忆的文字沾边 → 入队（已核实）
+ *   'unverified' source: "user"，两道里有一道没过                    → 入队（未核实）
+ *   'agent'      source: "agent" 或没标（插件按 agent 处理）          → 入队（agent）
+ */
+const classify = (candidate, userTexts) => {
+  if (candidate.source !== 'user') return 'agent'
+  const found = mod.verifyEvidence(userTexts, candidate.evidence).verified
+  const related = mod.evidenceRelates(candidate.evidence, [candidate.title, candidate.description, candidate.body])
+  return found && related ? 'verified' : 'unverified'
+}
+
+/** `options.only`：只拿某一类入队的候选来算（例如只看「已核实」）；不给就是全部入队的候选。 */
 function score(rows, options = {}) {
-  const { applyGate = false } = options
+  const { only } = options
   let tp = 0
   let fp = 0
   let fn = 0
@@ -102,8 +128,9 @@ function score(rows, options = {}) {
   for (const row of rows) {
     if (row.error) continue
     let candidates = row.candidates
-    if (applyGate) {
-      candidates = candidates.filter((c) => (typeof c.confidence === 'number' ? c.confidence : 0.6) >= MIN_CONF)
+    if (only) {
+      const userTexts = userLinesOf(row.snippet)
+      candidates = candidates.filter((c) => classify(c, userTexts) === only)
     }
     const pool = [...candidates]
     let matched = 0
@@ -125,7 +152,7 @@ function score(rows, options = {}) {
 }
 
 console.log(`模型 ${MODEL} @ ${BASE}`)
-console.log(`语料 ${FILE}：${snippets.length} 段；置信度闸门阈值 ${MIN_CONF}\n`)
+console.log(`语料 ${FILE}：${snippets.length} 段；候选全部入队，source: user 的按「出处 + evidenceRelates」分成已核实 / 未核实\n`)
 
 const rows = []
 for (const snippet of snippets) {
@@ -141,8 +168,8 @@ for (const snippet of snippets) {
   }
 }
 
-const withoutGate = score(rows)
-const withGate = score(rows, { applyGate: true })
+const queuedAll = score(rows)
+const queuedVerified = score(rows, { only: 'verified' })
 
 const pct = (x) => `${(x * 100).toFixed(1)}%`
 
@@ -166,9 +193,26 @@ for (const row of rows) {
   console.log(`  ${row.id.padEnd(24)} ${marks.padEnd(6)} ${titles}`)
 }
 
+// 按插件入队时的身份计数（插件三类都入队，不丢弃）；没标 source 的单独记一笔，插件按 agent 处理
+const tally = { verified: 0, unverified: 0, agent: 0, unlabeled: 0 }
+for (const row of rows) {
+  if (row.error) continue
+  const userTexts = userLinesOf(row.snippet)
+  for (const c of row.candidates) {
+    const kind = classify(c, userTexts)
+    tally[kind] += 1
+    if (kind === 'agent' && c.source !== 'agent') tally.unlabeled += 1
+  }
+}
+
+console.log('\n=== 入队身份（插件全部入队，不丢弃）===')
+console.log(`  入队（已核实）  ${tally.verified} 条（source: user，出处核对得到且与标题 / 摘要 / 正文沾边；面板标「用户原话」）`)
+console.log(`  入队（未核实）  ${tally.unverified} 条（source: user，两道里有一道没过；面板标「未核实」）`)
+console.log(`  入队（agent）   ${tally.agent} 条（其中没标 source、插件按 agent 处理的 ${tally.unlabeled} 条）`)
+
 console.log('\n=== 基线 ===')
-console.log(`  不加闸门  precision=${pct(withoutGate.precision)}  recall=${pct(withoutGate.recall)}  (TP=${withoutGate.tp} FP=${withoutGate.fp} FN=${withoutGate.fn})`)
-console.log(`  加闸门    precision=${pct(withGate.precision)}  recall=${pct(withGate.recall)}  (TP=${withGate.tp} FP=${withGate.fp} FN=${withGate.fn})`)
+console.log(`  全部入队的候选  precision=${pct(queuedAll.precision)}  recall=${pct(queuedAll.recall)}  (TP=${queuedAll.tp} FP=${queuedAll.fp} FN=${queuedAll.fn})`)
+console.log(`  其中已核实的    precision=${pct(queuedVerified.precision)}  recall=${pct(queuedVerified.recall)}  (TP=${queuedVerified.tp} FP=${queuedVerified.fp} FN=${queuedVerified.fn})`)
 
 const errors = rows.filter((r) => r.error).length
 if (errors > 0) console.log(`\n注意：${errors} 段请求失败，未计入评分。`)

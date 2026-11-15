@@ -4,6 +4,7 @@
  * 原则：**一个配置笔误不该让整个记忆系统不加载**。所以 resolveConfig 永不抛，
  * 坏值退回默认值并记录 issue，issue 通过 memory_status 暴露给用户。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 const mod = await import('../index.js')
 
 let failures = 0
@@ -113,6 +114,66 @@ console.log('\n== 字符串配置项必须真正生效（防「静默丢弃」�
   )
 
   mod.configure(undefined)
+}
+
+console.log('\n== 写入准入重设计的三个新键：设置后读得出来 ==')
+{
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const defaults = R({})
+  check('默认 agentWrites = review', defaults.config.agentWrites === 'review')
+  check('默认 globalMemoryDir 为空（= <dshHome>/dsh-workspace-memory/global/memory）', defaults.config.globalMemoryDir === '')
+  check('默认 globalIndexMaxLines = 60', defaults.config.globalIndexMaxLines === 60)
+
+  const dir = path.join(os.tmpdir(), 'wsm-global-cfg', 'memory')
+  const r = mod.configure({ agentWrites: 'direct', globalMemoryDir: dir, globalIndexMaxLines: 0 })
+  check('三个键都生效且没有 issue', r.issues.length === 0, r.issues.join(' | '))
+  check('agentWrites = direct', r.config.agentWrites === 'direct')
+  check('globalMemoryDir 原样保留绝对路径', r.config.globalMemoryDir === dir, r.config.globalMemoryDir)
+  check('globalMemoryDirOf() 用的就是它', mod.globalMemoryDirOf() === dir, mod.globalMemoryDirOf())
+  check('globalIndexMaxLines = 0（不注入全局索引）', r.config.globalIndexMaxLines === 0)
+
+  const home = R({ globalMemoryDir: '~/somewhere/memory' })
+  check('globalMemoryDir 支持 ~ 开头', home.config.globalMemoryDir === path.join(os.homedir(), 'somewhere', 'memory'), home.config.globalMemoryDir)
+  check('globalIndexMaxLines 上限 200', R({ globalIndexMaxLines: 200 }).config.globalIndexMaxLines === 200)
+
+  for (const [label, raw, field] of [
+    ['agentWrites 非法值', { agentWrites: 'always' }, 'agentWrites'],
+    ['agentWrites 非字符串', { agentWrites: 1 }, 'agentWrites'],
+    ['globalMemoryDir 相对路径', { globalMemoryDir: 'relative/dir' }, 'globalMemoryDir'],
+    ['globalMemoryDir 非字符串', { globalMemoryDir: 5 }, 'globalMemoryDir'],
+    ['globalIndexMaxLines 超范围', { globalIndexMaxLines: 201 }, 'globalIndexMaxLines'],
+    ['globalIndexMaxLines 负数', { globalIndexMaxLines: -1 }, 'globalIndexMaxLines'],
+  ]) {
+    const bad = R(raw)
+    check(`${label} → 记录 issue 并退回默认`, bad.issues.some((i) => i.startsWith(`${field}:`)) && bad.config[field] === defaults.config[field], JSON.stringify(bad.issues))
+  }
+  check('agentWrites 空串 = 默认值，不算错', R({ agentWrites: '' }).issues.length === 0 && R({ agentWrites: '' }).config.agentWrites === 'review')
+
+  mod.configure(undefined)
+  // 2026-11-14 第二轮：默认位置改为以包名做命名空间（官方首方包先例），并跟随宿主主目录（dshHome()）
+  check('恢复默认后 globalMemoryDirOf() 指向 <dshHome>/dsh-workspace-memory/global/memory',
+    mod.globalMemoryDirOf() === path.join(mod.dshHome(), 'dsh-workspace-memory', 'global', 'memory'), mod.globalMemoryDirOf())
+  // 只比路径字符串，不碰那个目录
+  const saved = process.env.DSH_HOME
+  try {
+    delete process.env.DSH_HOME
+    check('  …没设 DSH_HOME 时就是 ~/.dsh 下面', mod.globalMemoryDirOf() === path.join(os.homedir(), '.dsh', 'dsh-workspace-memory', 'global', 'memory'), mod.globalMemoryDirOf())
+  } finally {
+    if (saved === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = saved
+  }
+}
+
+console.log('\n== 两个废弃键：给废弃 issue，不当成未知键 ==')
+{
+  for (const key of ['directWriteConfidence', 'minExtractConfidence']) {
+    const r = R({ [key]: 0.8 })
+    const issue = r.issues.find((i) => i.startsWith(`${key}:`)) ?? ''
+    check(`${key} → 废弃说明（指向 agentWrites）`, /已废弃/.test(issue) && /agentWrites/.test(issue), issue)
+    check(`${key} → 不说「未知配置项」`, !/未知配置项/.test(issue), issue)
+    check(`${key} → 不进 config`, !(key in r.config))
+  }
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)

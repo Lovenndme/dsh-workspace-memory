@@ -9,6 +9,7 @@
  *
  * 最容易写错的一条：把长正文截断。这里专门断言「存进去的和传进去的一模一样」。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -49,9 +50,10 @@ function makeEnv(config = {}) {
     get() { return undefined },
   }
 
-  mod.apply(ctx, { agentsFile: path.join(root, 'AGENTS.md'), duplicateCheck: false, ...config })
+  mod.apply(ctx, { agentsFile: path.join(root, 'AGENTS.md'), memoryDir: path.join(root, 'proj', 'memory'), globalMemoryDir: path.join(root, 'global', 'memory'), agentWrites: 'direct', duplicateCheck: false, ...config })
 
-  const projectDir = path.join(os.homedir(), '.dsh', 'projects', mod.encodeProjectPath(workspace))
+  // 记忆库与全局按需库都放在临时目录（经 apply 传入），不碰 ~/.dsh
+  const projectDir = path.join(root, 'proj')
   const memoryDir = path.join(projectDir, 'memory')
 
   return {
@@ -78,7 +80,8 @@ const mem = (n, extra = {}) => ({
   title: `记忆 ${n}`,
   description: `摘要 ${n}`,
   body: `正文 ${n}。`,
-  confidence: 0.95,
+  type: 'project',
+  source: 'agent',
   ...extra,
 })
 
@@ -153,7 +156,6 @@ console.log('\n== 召回预算：少带一条，不切正文 ==')
         title: `召回 ${i}`,
         description: '检索关键词 预算 命中',
         body,
-        confidence: 0.9,
       })
     }
     const found = await mod.recall(memoryDir, '检索关键词 预算 命中', 3)
@@ -179,7 +181,6 @@ console.log('\n== 预算关掉（0）时全部返回 ==')
         title: `全部 ${i}`,
         description: '共同关键词 测试',
         body: '共同关键词 测试 ' + '内容'.repeat(200),
-        confidence: 0.9,
       })
     }
     const found = await mod.recall(memoryDir, '共同关键词 测试', 3)

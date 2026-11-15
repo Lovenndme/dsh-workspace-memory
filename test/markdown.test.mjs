@@ -7,6 +7,7 @@
  * 做法：给 client.js 注入一个收集钩子，把 factory 内部的纯函数拿出来测。
  * client.js 是浏览器脚本，所以要先伪造 window.__ModuleLoader__ 和 require('react')。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 

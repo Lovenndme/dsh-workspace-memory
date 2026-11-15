@@ -7,6 +7,7 @@
  *   1. **只改目标章节**——其余章节必须逐字保留（否则用户手写的内容会被悄悄改写）。
  *   2. **编号始终连续**——删/增一章后 `## N.` 与 `### N.M` 要重排，符合文件既有约定。
  */
+import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
