@@ -22,7 +22,8 @@
     "icon.svg",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "scripts/install-deps.mjs"
   ],
   "keywords": [
     "dsh",
