@@ -1298,3 +1298,41 @@ test 组其余题目没有用来调整过提示词。
 **回退**：在插件目录 `git revert` 本次合并的提交（或 `git reset --hard 2fa2737`，会丢弃之后的改动），再在 DSH 里对插件 disable → enable。
 
 **过程中的意外**：06:12 系统清空了会话暂存目录，设计说明、接口约定、盘点文件丢失，已按最终状态重写进 docs/PANEL.md；第一轮客户端审查的 playwright 日志曾写进另一个仓库的当前目录（已移走、已核对干净），检查脚本因此改为先 cd 到临时目录。
+
+## 二十六、发布到 npm（2026-11-15）
+
+**包名**：`@lovenndme/dsh-workspace-memory`。裸名 `dsh-workspace-memory` 已被 `luyy9apples` 占用
+（npm 0.1.0，仓库 github.com/luyy9apples/dsh-workspace-memory），所以改用 scoped 名。
+
+**仓库**：https://github.com/Lovenndme/dsh-workspace-memory（public，main）。
+推送必须走 SSH：gh 的 OAuth token 只有 'gist'/'read:org'/'repo'，缺 `workflow` scope，
+HTTPS 推 `.github/workflows/*` 会被拒（`refusing to allow an OAuth App to create or update workflow`）。
+本机 SSH 已注册，改 remote 为 `git@github.com:...` 即可。
+
+**链路**：`.github/workflows/publish-pending.yml`（沿用 dsh-profile-stats 的模板）：
+cron `0 */4 * * *` + `workflow_dispatch`（含 dry_run）→ tag 门禁 → patch 升版（**node** 写 package.json）
+→ 生成 CHANGELOG → `node --check` → 装可选依赖 → `npm test` → 提交 → `npm publish --access public`
+→ 打 tag → `gh release create` → 轮询 registry（超时只告警，不让 CDN 慢把 job 判红）。
+
+**首次发布**：先 `dry_run=true` 验证链路（它按设计仍会提交 `release: v0.8.1`，只是不发 npm、不打 tag），
+再真实运行发出 **0.8.2**：registry latest=0.8.2、tag `v0.8.2`、GitHub Release v0.8.2 三处都到位。
+
+**只在 Linux CI 上暴露的问题（本地 Windows 一直全绿）**——这是本次最大的收获：
+
+1. `test/config.test.mjs` 硬编码 `C:\tmp\mem`，Linux 上不是绝对路径 → 改 `path.resolve('/tmp/...')`。
+2. `test/extract.test.mjs` 的语义去重依赖向量嵌入，CI 没装 leanvec → 先探 `rebuildVectors().mode`，
+   非 hybrid 时**打印 SKIP**，不假装通过。
+3. `test/golden.test.mjs` 纯关键词模式下中文 recall 实测只有 20%（本地 hybrid 是 70%）→
+   非 hybrid 时跳过召回阈值，只查语料结构与负样本。
+4. `test/panel-routes.test.mjs` 两处 cmd 引号断言是 Windows 专属 → 非 Windows 打印 SKIP。
+5. workflow 补一步 `npm install --no-save --include=optional`（装 leanvec）并 `continue-on-error`——
+   装不上只是少测，不能让一次 85MB 下载把发版无限期卡住。
+
+**教训**：本地 `npm test` 42 项全绿**不等于** CI 绿。发版门禁的价值恰恰在于它跑在另一个 OS 上；
+「我这儿是好的」不是证据。
+
+**还没验证**：npm 安装路径（`plugin_manager install_bundle --target @lovenndme/dsh-workspace-memory`）
+没在这个 profile 里试过——当前 profile 仍以 link 装同一份源码，按「pnpm remove 会删穿 link 目标」的教训，
+不主动动它，等下次要统一来源时再按那条流程做。
+
+**副作用**：这次 HANDOFF 提交会被下一次 4 小时批量发成 0.8.3（任何提交都会触发一次 patch 发布，这是设计如此）。
