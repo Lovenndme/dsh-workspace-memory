@@ -1387,3 +1387,25 @@ cron `0 */4 * * *` + `workflow_dispatch`（含 dry_run）→ tag 门禁 → patc
 **还没验证**：没在真实 DSH 里跑过。重载后确认 `application` 为 `applied`、无 diagnostic，再试：只敲 `/memory` 是否弹出选单、回车两下是否出总览、`/memory ` 加空格时输入框提示、选中「收下草稿」是否打开面板、命令卡按钮。
 
 **补充（2026-11-16）**：用户把决定交给我。保留子命令选单；删除独立命令 `/memory_extract`、`/memory_pending` 的宿主注册（补全菜单只剩 `/memory` 与 `/memory_list`），`/memory pending`、`/memory extract` 照常可用，旧会话历史里的这两张卡由 client.js 照常渲染；恢复方法写在 index.js 原注册位置的注释里。前端模块名修复（3a5d688）先单独推送发版；本节的 `/memory` 改动等用户在真实 DSH 里试过选单再推。
+
+## 二十九、自动记的只进记忆库，全局 AGENTS.md 只由用户写（2026-11-16）
+
+**决定**：用户看了 Claude Code 的 CLAUDE.md 说明后决定对齐它的做法——自动记忆从不写 CLAUDE.md，CLAUDE.md 只由人写（或用户明确要求时由 Claude 用文件工具写）。本插件里全局 AGENTS.md ≈ `~/.claude/CLAUDE.md`、记忆库 ≈ 自动记忆。这推翻了 2026-11-15 的「跨项目的做事与表达偏好进全局 AGENTS.md 常驻（面板确认）」（第二十五节 25.11）。
+
+**做了什么**：
+- `memory_remember` 删除 `load` 参数，以及只配常驻用的 `chapter` / `newChapter`；删掉 `ALWAYS_TYPES` / `resolveLoad` 的强制常驻与 `LOAD_FORCED_TEXT`。`user` / `feedback` + `global` 按来源分流写进跨项目记忆库（通用记忆）。模型仍传 `load` 时照常按需处理，返回带 `loadIgnored: true` 与 `LOAD_IGNORED_TEXT`；这句接在任何结果后面，所以措辞不说「已保存」（Codex 初稿写的是「Saved as a memory.」，接在拒写后面会让模型说「记下了」，验收时改掉）。
+- 自动抽取候选去掉 `load`，只生成按需草稿；抽取提示词「global AGENTS.md 经记忆到达」那句改为「全局 AGENTS.md 不是记忆，跳过」。
+- 系统提示段：偏好一行改为「→ 记忆，scope 选 global」；新增一段「全局的 AGENTS.md 是用户自己的指令文件，不要主动提议往里写；用户明确要求写进去时，再用文件工具写」。`memory_status` 工具里「load always 一律待确认」那半句删掉。
+- 旧版本留下的常驻草稿照常可以收下（按章标题写章节、写成功后再取代旧条）或丢弃；面板的「升为全局指令」与分章编辑不变——这些是用户亲自操作，就是「用户自己写」。
+- `/memory` 总览「写入」一行按 `agentWrites` 区分（direct：直接存；review：先进待确认），都加上「全局指令和项目指令只由你来写」。
+- 面板：总览横幅与待确认空状态不再说「要写进全局指令的先放这里」；流程图第 4 行（关于你 / 做事要求）改指向通用记忆，旁注「想每轮都带着，可以升为全局指令」；全局指令文件缺失时的提示改为「只由你来写」；把「关于你 / 做事要求」改成「所有项目」时的提示从警告色的「应该升为全局指令」改成普通提示的可选建议。
+- 模型可见文字基线重写（`test/fixtures/model-visible-text.json`）：变的只有系统提示段、`memory_remember` 的输入 schema（少了 load / chapter / newChapter）与输出 schema（loadForced → loadIgnored）、抽取提示词、`memory_status` 文字。
+- 评测题 12 道 `remember:always` 改为 `remember`（缺 scope 的补 `global`），计分去掉常驻判定。
+
+**分工**：后端由 Codex 实现（`codex-worker`），提示词与面板文案、README / CLAUDE.md 与验收由 Claude 完成。验收时另修两处 Codex 照任务说明做、但说明本身有漏洞的地方：兼容提示的「已保存」措辞；总览「写入」一行没区分 `agentWrites: direct`。
+
+**审查**：Codex 只读审查两轮。第一轮通用审查未发现缺陷；第二轮按「兼容性与旧数据」定向审查（旧常驻草稿的收下 / 丢弃 / 显示、草稿去重意图、旧参数 × 各拒写分支的返回文本、跨库更新、旧评测结果重算）也未发现缺陷。它指出一个可接受的边界：旧常驻草稿与新写入的同名按需记忆会并存（去重意图因 load 不同而区分），用户收下旧草稿后同一条偏好会在全局指令与通用记忆各有一份——不能因同名就静默取消旧草稿，由用户在面板上丢弃旧草稿即可。
+
+**评测**（目标模型 Ollama DeepSeek V4.1 Flash，`--max-steps=24`，共 339 次请求）：受影响的 12 道偏好题 + 12 道抽查（项目 AGENTS.md、skill、README、记忆、不记各类）。dev 17 题判对 16、test 7 题全对；偏好题 12/12 都以 `scope: global` 直写进通用记忆，没有一次写全局 AGENTS.md，归宿题 3/3。唯一判错的 E5（「这次不用给我看 diff 了，直接提交吧」，应不记）把提交过程中碰到的问题记成了 agent 来源的踩坑经验（进待确认）；新版复跑 3 次为 误记 / 用尽 / 对，改动前的版本跑 3 次全部 24 步用尽，说明这题本来就不稳，与本次改动无关。
+
+**还没验证**：真实 DSH 里的行为。用户队列里如有旧版本留下的「写进全局指令」草稿（2026-11-15 迁移时在 DSH-Workspace 建过 5 条），收下仍会写进全局 AGENTS.md；按新规则可以直接丢弃，对应偏好让模型重新记进通用记忆即可。
