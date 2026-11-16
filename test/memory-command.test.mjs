@@ -68,7 +68,7 @@ section('输入提示与补全菜单那一行')
     check('hint 只放最常用的几个，带中文含义', def.input?.hint === 'pending 待确认 · extract 抽取 · list 全部 · help 更多', def.input?.hint)
     check('  …hint 非空（空 hint 会让插件激活失败）', typeof def.input.hint === 'string' && def.input.hint.trim().length > 0)
     check('description 是一句中文，指向 help', /[一-鿿]/.test(def.description) && def.description.includes('/memory help') && !def.description.includes('|'), def.description)
-    check('独立命令照旧（不增不删）', ['memory_extract', 'memory_pending', 'memory_list'].every((name) => host.commands.has(name)) && host.commands.size === 4)
+    check('只注册 /memory 与 /memory_list（/memory_extract、/memory_pending 已收回成子命令）', host.commands.has('memory') && host.commands.has('memory_list') && !host.commands.has('memory_extract') && !host.commands.has('memory_pending') && host.commands.size === 2, [...host.commands.keys()].join(','))
   } finally {
     host.cleanup()
   }

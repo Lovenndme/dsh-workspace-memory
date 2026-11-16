@@ -345,10 +345,9 @@ section('命令：全局草稿收下的提示、缺 rawInput 不抛、库满返�
   try {
     host.write(host.agentsFile, '# Rules\n\n## 1. First\n\nkeep me\n')
 
-    const noInput = await host.command('memory_pending', undefined)
-    check('memory_pending 缺 rawInput：不抛，正常回应', noInput.kind === 'success', JSON.stringify(noInput))
-    const noExtractInput = await host.command('memory_extract', undefined)
-    check('memory_extract 缺 rawInput：不抛', typeof noExtractInput.kind === 'string')
+    // 2026-11-16 起 /memory_pending、/memory_extract 不再单独注册（收回成 /memory 的子命令），这里改测 /memory 本身
+    const noInput = await host.command('memory', undefined)
+    check('memory 缺 rawInput：不抛，按总览回应', noInput.kind === 'success' && noInput.text.startsWith('记忆总览'), JSON.stringify(noInput))
     const noInvocation = await host.commands.get('memory').handler(undefined)
     check('invocation 整个是 undefined 也不抛', noInvocation.kind === 'error', JSON.stringify(noInvocation))
     const overview = await host.command('memory', '')

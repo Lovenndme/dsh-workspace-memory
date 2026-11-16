@@ -1385,3 +1385,5 @@ cron `0 */4 * * *` + `workflow_dispatch`（含 dry_run）→ tag 门禁 → patc
 - `test/memory-command.test.mjs`：总览各状态、status、help、建议、pending / list / forget 文案、显示宽度对齐、不含本机路径；把宿主路由的真实响应喂给 client.js 的 `normalizeAgents` / `normalizeProject` / `costParts` / `tokensOf`，与总览的 tokens 对拍；`relativeTimeZh` 与面板 `relTime` 对拍；用假 ctx 跑 client 的 `apply`，检查命令卡按钮与 decorate 的注册、选中行为、旧版降级。
 
 **还没验证**：没在真实 DSH 里跑过。重载后确认 `application` 为 `applied`、无 diagnostic，再试：只敲 `/memory` 是否弹出选单、回车两下是否出总览、`/memory ` 加空格时输入框提示、选中「收下草稿」是否打开面板、命令卡按钮。
+
+**补充（2026-11-16）**：用户把决定交给我。保留子命令选单；删除独立命令 `/memory_extract`、`/memory_pending` 的宿主注册（补全菜单只剩 `/memory` 与 `/memory_list`），`/memory pending`、`/memory extract` 照常可用，旧会话历史里的这两张卡由 client.js 照常渲染；恢复方法写在 index.js 原注册位置的注释里。前端模块名修复（3a5d688）先单独推送发版；本节的 `/memory` 改动等用户在真实 DSH 里试过选单再推。

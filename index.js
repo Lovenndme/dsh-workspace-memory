@@ -6769,39 +6769,14 @@ export function apply(ctx, rawConfig) {
     'memory command registration',
   )
 
-  /* —— 无参子命令各注册一个独立命令 ——————————————————————————————
-   * 为什么要拆：DSH 的命令补全只补**命令名**，没有参数级补全
-   * （宿主 CommandInputDescriptor 只有 hint 与 attachments）。所以想让用户从补全菜单里点选
-   * `/memory extract`，只能把 extract 本身注册成一个命令。
-   * （DSH 0.2.2 起客户端另有 commandUi.decorate：client.js 给「只敲 /memory」挂了子命令选单，见那里的说明。）
-   * 带 id 的 accept / reject / forget 不拆分——选完还得手打 id，
-   * 那几个操作在面板的待确认/详情页里点按钮更省事。
+  /* —— 不再单独注册 /memory_extract、/memory_pending（2026-11-16）————————————
+   * 以前把这两个无参子命令各注册成独立命令，是因为 DSH 只补全命令名、不补参数，想在补全菜单里点选只能拆。
+   * 现在 client.js 经 commandUi.decorate 给「只敲 /memory」挂了子命令选单（同 DSH 官方 /permission 的做法），
+   * 补全菜单里四个 memory 开头的命令显得重复，用户反馈「/memory 之后还有很多指令」，所以收回到 /memory 的子命令。
+   * `/memory pending`、`/memory extract` 照常可用；旧会话历史里的 /memory_pending 卡片由 client.js 照常渲染。
+   * 要恢复：把这两个命令按 executeMemoryCommand(ctx, invocation, sub) 重新注册即可（forcedSub 参数保留着），
+   * 注意无参命令不能声明 input（空 hint 会让整个插件激活失败）。
    */
-  // 这两个子命令**不接受参数**，所以不能声明 input：
-  // DSH 要求 input.hint 非空（实测 `input hint must not be empty` 会让整个插件激活失败）。
-  const SUBCOMMAND_ENTRIES = [
-    {
-      name: 'memory_extract',
-      description: '立即跑一次记忆抽取（不受自动抽取开关影响），结果进入待确认队列',
-    },
-    {
-      name: 'memory_pending',
-      description: '查看待确认的记忆草稿；在面板「待确认」页签里可逐条收下或丢弃',
-    },
-  ]
-
-  for (const entry of SUBCOMMAND_ENTRIES) {
-    const sub = entry.name.slice('memory_'.length)
-    ctx.effect(
-      () =>
-        ctx.commands.register({
-          name: entry.name,
-          description: entry.description,
-          handler: (invocation) => executeMemoryCommand(ctx, invocation, sub),
-        }),
-      `${entry.name} registration`,
-    )
-  }
 
   /* —— /memory_list ——————————————————————————————————————————
    * 这个命令自身只回一行确认文案。真正的动作在客户端半区：命令结果卡片挂载时
@@ -7263,8 +7238,8 @@ function helpText() {
   const common = alignColumns(
     [
       ['/memory', '总览：待确认、每轮带上的指令、项目记忆与通用记忆'],
-      ['/memory pending', '列出待确认的草稿（同 /memory_pending）'],
-      ['/memory extract', '立刻从这段对话里找值得记的，结果进待确认（同 /memory_extract）'],
+      ['/memory pending', '列出待确认的草稿'],
+      ['/memory extract', '立刻从这段对话里找值得记的，结果进待确认'],
       ['/memory list', '列出项目记忆与通用记忆里的全部条目'],
       ['/memory status', '诊断：库的位置、索引、向量、配置问题'],
     ],

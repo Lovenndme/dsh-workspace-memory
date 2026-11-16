@@ -131,8 +131,8 @@ node scripts/install-deps.mjs   # 约 85 MB，装到 ~/.dsh/dsh-workspace-memory
 常用
 /memory                      总览：待确认几条、每轮都读的全局指令与项目指令（大小与上限）、
                              用到才查的通用记忆与项目记忆（条数与分类）、每轮固定开销约多少 tokens
-/memory pending              列出待确认草稿，每条写明收下后去哪、来源（也可以用 /memory_pending）
-/memory extract              立刻从当前对话里抽取一次候选，结果进待确认（也可以用 /memory_extract）
+/memory pending              列出待确认草稿，每条写明收下后去哪、来源
+/memory extract              立刻从当前对话里抽取一次候选，结果进待确认
 /memory list                 列出两个库的记忆和更新时间（每个库最多列最近 30 条，全部在面板里看）
 /memory status               诊断：两个库的位置、索引、向量、自动抽取开关、配置问题
 
