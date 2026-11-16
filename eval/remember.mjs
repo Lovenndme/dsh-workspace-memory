@@ -961,7 +961,8 @@ if (RESCORE) {
   const schemaProps = PRIOR.meta.rememberSchemaProps ?? propsFromShape(PRIOR.meta.rememberSchema)
   const splits = splitsOf(SPLIT)
   console.log(`重算 ${RESCORE}（插件 ${PRIOR.meta.index}；不发任何请求）`)
-  // 重算以当前题目文件的 accept 为准，不用结果文件里存下的旧 accept
+  // 重算以当前题目文件的 accept 为准，不用结果文件里存下的旧 accept。
+  // 2026-11-16：旧常驻结果也只按 remember 计分，不再用 load 推断去向；不代表重新执行了写入。
   console.log(`题目文件：${path.join(HERE, 'remember-cases.json')}（accept 以它为准，结果文件里存下的旧 accept 不用）`)
   const changes = rescoreRows(PRIOR.rows, schemaProps)
   printReport(PRIOR.rows, splits)

@@ -1,21 +1,9 @@
-/**
- * `memory_remember` 写进全局 AGENTS.md 的分支（scope: global + load: always）。
- *
- * 规则（用户 2026-11-03 定，2026-11-14 改成 scope × load 两个选择）：
- *   · 只有 `scope: global` 且 `load: always` 才写 ~/.dsh/AGENTS.md；单独的 `scope: global` 进全局按需库。
- *   · **同名章更新，不追加重名**——AGENTS.md 每轮注入且有字节预算，重复条目会把重要内容挤掉。
- *   · **写 AGENTS.md 一律先进待确认，用户在面板里收下才写**（第五轮设计变更）——写错会影响所有项目的每一轮，
- *     而证据核对只能证明「这几个字出自用户」：用户回一句「好的，继续」就能被拿来当证据。
- *     以前「用户原话 + 证据通过」会直写，那条路已经关掉；下面的用例都改成「入队 → 收下 → 写入」。
- *   · 章节协议（chapter: N / 同名 / newChapter）在**入队之前**校验，章号与当时的章标题存进草稿，收下时核对。
- *
- * 本测试用临时 AGENTS.md + 临时工作区 + 临时全局库，不碰真实的 ~/.dsh。
- */
+/** 升级前遗留常驻草稿的章节写入兼容；新 memory_remember 只写记忆库。 */
 import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { realFilesGuard, userEvent } from './fake-host.mjs'
+import { realFilesGuard, userEvent, legacyAlwaysDraft } from './fake-host.mjs'
 
 const mod = await import('../index.js')
 
@@ -105,36 +93,36 @@ function makeEnv() {
 }
 
 const run = (env, args) => env.tool.execute(args, { agent: { id: 'a-test' } })
-/** 常驻写入：入队（断言进了待确认、AGENTS.md 没动），再收下，返回两步的结果。 */
+/** 构造历史常驻草稿，再收下，验证旧草稿仍按原章节协议写入。 */
 async function queueAndAccept(env, args) {
   const before = env.agentsText()
-  const queued = await run(env, args)
+  const queued = legacyAlwaysDraft(mod, env, args)
   const untouched = env.agentsText() === before
   const accepted = queued.pending === true ? await mod.acceptPending(env.memoryDir, queued.id) : { ok: false, reason: 'not-queued' }
   return { queued, untouched, accepted }
 }
-/** 用户原话支撑的、写进 AGENTS.md 的参数。 */
+/** 升级前的用户来源常驻草稿；也用来覆盖带旧 load 的新调用。 */
 const userAlways = (extra) => ({ type: 'feedback', source: 'user', scope: 'global', load: 'always', ...extra })
 
-console.log('== 工具声明了 scope / load 参数 ==')
+console.log('== 工具声明 scope，移除 load 参数 ==')
 {
   const env = makeEnv()
   try {
     const schema = env.tool.parameters.properties.scope
     check('有 scope 字段', Boolean(schema), JSON.stringify(Object.keys(env.tool.parameters.properties)))
     check('scope 枚举含 project / global', (schema?.enum ?? []).join(',') === 'project,global', JSON.stringify(schema?.enum))
-    check('load 枚举含 on-demand / always', (env.tool.parameters.properties.load?.enum ?? []).join(',') === 'on-demand,always')
+    check('输入 schema 不再包含 load', !('load' in env.tool.parameters.properties))
   } finally {
     env.cleanup()
   }
 }
 
-console.log('\n== global + always + 用户原话 → 先进待确认，收下后写 AGENTS.md，不写任何记忆库 ==')
+console.log('\n== 历史常驻草稿收下后写 AGENTS.md，不写任何记忆库 ==')
 {
   const env = makeEnv()
   try {
     const { queued, untouched, accepted } = await queueAndAccept(env, userAlways({ title: '全局规则甲', body: '规则正文。', evidence: '以后所有项目都用中文回答我', newChapter: true }))
-    check('用户原话、证据核对得上也进待确认（always-needs-user）', queued.pending === true && queued.reason === 'always-needs-user', JSON.stringify(queued))
+    check('旧常驻草稿可继续收下', queued.pending === true && accepted.ok === true, JSON.stringify(queued))
     check('  …入队时 AGENTS.md 一个字没动', untouched)
     const text = env.agentsText()
     check('收下后 AGENTS.md 新增了该章', text.includes('## 2. 全局规则甲'), text.slice(-120))
@@ -152,13 +140,13 @@ console.log('\n== 没声明 newChapter 且不同名 → 拒写并回清单 ==')
   const env = makeEnv()
   try {
     const before = env.agentsText()
-    const result = await run(env, userAlways({ title: '一个全新的主题', body: '正文。', evidence: '以后所有项目都用中文回答我' }))
+    const result = mod.planAgentsChapter({ title: '一个全新的主题' })
     check('没有写入', env.agentsText() === before)
     check('reason 是 needs-confirmation（入队之前就校验）', result.reason === 'needs-confirmation', JSON.stringify(result))
     check('  …也没有进待确认队列', mod.listPending(env.memoryDir).length === 0)
-    check('written 标记为 false', result.written === false, JSON.stringify(result.written))
-    check('回显了现有章节清单', /1\. 已有的一章/.test(result.text ?? ''), result.text?.slice(0, 200))
-    check('提示了两种出路', /chapter: <number>/.test(result.text ?? '') && /newChapter: true/.test(result.text ?? ''))
+    check('规划未通过', result.ok === false, JSON.stringify(result))
+    check('规划返回现有章节清单', result.chapters?.includes('1. 已有的一章'), JSON.stringify(result))
+    check('规划不产生草稿', mod.listPending(env.memoryDir).length === 0)
   } finally {
     env.cleanup()
   }
@@ -186,9 +174,9 @@ console.log('\n== chapter 越界 → 明确报错 ==')
   const env = makeEnv()
   try {
     const before = env.agentsText()
-    const result = await run(env, userAlways({ title: 'x', body: 'y', evidence: '以后所有项目都用中文回答我', chapter: 99 }))
+    const result = mod.planAgentsChapter({ title: 'x', chapter: 99 })
     check('拒写', env.agentsText() === before)
-    check('说明章号不存在（入队之前就拒写）', result.reason === 'chapter-not-found' && /no chapter 99/.test(result.text ?? '') && mod.listPending(env.memoryDir).length === 0, result.text)
+    check('说明章号不存在（入队之前就拒写）', result.reason === 'chapter-not-found' && result.chapter === 99 && mod.listPending(env.memoryDir).length === 0, result.text)
   } finally {
     env.cleanup()
   }
@@ -213,20 +201,20 @@ console.log('\n== 同名再写 → 更新，不追加重名 ==')
   }
 }
 
-console.log('\n== global + always：不论来源、不论证据，一律进待确认，AGENTS.md 不动 ==')
+console.log('\n== 旧 load 不改变新调用的来源分流，AGENTS.md 不动 ==')
 {
   const env = makeEnv()
   try {
     const before = env.agentsText()
-    const agent = await run(env, { title: '模型自己总结的全局规则', body: '正文。', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', newChapter: true })
-    check('agent 来源 → pending / always-needs-user', agent.pending === true && agent.reason === 'always-needs-user', JSON.stringify(agent))
-    const fake = await run(env, userAlways({ title: '证据对不上的全局规则', body: '正文。', evidence: '用户从没说过这句话', newChapter: true }))
-    check('user 来源（证据对不上）→ 同样 pending / always-needs-user', fake.pending === true && fake.reason === 'always-needs-user', JSON.stringify(fake))
-    const real = await run(env, userAlways({ title: '以后所有项目都用中文回答', body: '正文。', evidence: '以后所有项目都用中文回答我', newChapter: true }))
-    check('user 来源、证据核对得上 → 也是 pending / always-needs-user（不再直写）', real.pending === true && real.reason === 'always-needs-user', JSON.stringify(real))
+    const agent = await run(env, { slug: 'agent-global', title: '模型自己总结的全局规则', body: '正文。', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', newChapter: true })
+    check('agent 来源 → pending / agent-review', agent.pending === true && agent.reason === 'agent-review' && agent.load === 'on-demand' && agent.loadIgnored === true, JSON.stringify(agent))
+    const fake = await run(env, userAlways({ slug: 'fake-global', title: '证据对不上的全局规则', body: '正文。', evidence: '用户从没说过这句话', newChapter: true }))
+    check('user 来源（证据对不上）→ pending / evidence-not-found', fake.pending === true && fake.reason === 'evidence-not-found' && fake.load === 'on-demand', JSON.stringify(fake))
+    const real = await run(env, userAlways({ slug: 'real-global', title: '以后所有项目都用中文回答', body: '正文。', evidence: '以后所有项目都用中文回答我', newChapter: true }))
+    check('user 来源核实后直写跨项目记忆库', !real.pending && real.scope === 'global' && real.loadIgnored === true && env.globalFiles().includes('real-global.md'), JSON.stringify(real))
     check('文本让模型告诉用户去面板看', /waiting in the memory panel/.test(fake.text) && /AGENTS\.md/.test(fake.text), fake.text)
     check('AGENTS.md 未被改动', env.agentsText() === before)
-    check('两个记忆库都没有写入', env.libraryFiles().length === 0 && env.globalFiles().length === 0)
+    check('只有核实原话写入跨项目库，两个未核实草稿都按需', env.libraryFiles().length === 0 && env.globalFiles().length === 1 && mod.listPending(env.memoryDir).every(d => d.meta.load === 'on-demand'))
   } finally {
     env.cleanup()
   }
@@ -236,7 +224,7 @@ console.log('\n== 收下常驻草稿 → 写进 AGENTS.md ==')
 {
   const env = makeEnv()
   try {
-    const queued = await run(env, { title: '待确认的全局规则', body: '确认后的正文。', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
+    const queued = legacyAlwaysDraft(mod, env, { title: '待确认的全局规则', body: '确认后的正文。', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
     const draft = mod.listPending(env.memoryDir).find((item) => item.id === queued.id)
     check('草稿记下了 scope / load / source', draft?.meta.scope === 'global' && draft?.meta.load === 'always' && draft?.meta.source === 'agent', JSON.stringify(draft?.meta))
     const accepted = await mod.acceptPending(env.memoryDir, queued.id)

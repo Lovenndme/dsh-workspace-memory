@@ -82,7 +82,6 @@ const PARAM_RULES = {
   source: 'SOURCE_RULE',
   evidence: 'EVIDENCE_RULE',
   scope: 'SCOPE_RULE',
-  load: 'LOAD_RULE',
   supersedes: 'SUPERSEDES_RULE',
   paths: 'PATHS_RULE',
 }
@@ -126,9 +125,11 @@ section('三层结构：参数规则就是对应常量，工具说明只写做�
     check('WORTH_SAVING 只含 worth / not worth 两句（supersedes 那句不进抽取提示词复用的这一段）', !/supersedes/.test(mod.WORTH_SAVING) && mod.WORTH_SAVING.split('. ').length <= 3)
     // §9.4：说明里不再让模型「告诉用户在面板里等」——直写时它也这么说了；怎么对用户说由返回文本给出
     check('工具说明不再叫模型说「在面板里等确认」', !/memory panel/.test(description) && description.endsWith("Returns the saved id, a pending id when the memory waits for the user's review, or a refusal that says what to change."), description)
-    check('source / load / type 有枚举，type 含 pitfall', schema.properties.source?.enum?.join() === 'user,agent' && schema.properties.load?.enum?.join() === 'on-demand,always' && schema.properties.type.enum.includes('pitfall'))
-    check('chapter / newChapter 写明只在 load: always 时有意义',
-      /Only with load "always"/.test(schema.properties.chapter.description) && /Only with load "always"/.test(schema.properties.newChapter.description))
+    check('source / type 有枚举，输入不再声明 load', schema.properties.source?.enum?.join() === 'user,agent' && !('load' in schema.properties) && schema.properties.type.enum.includes('pitfall'))
+    // 2026-11-16：没有常驻写入后，只配 load "always" 用的 chapter / newChapter 随 load 一起删除
+    check('输入不再声明 chapter / newChapter，参数说明里也不再提 load',
+      !('chapter' in schema.properties) && !('newChapter' in schema.properties) && !/load "/.test(JSON.stringify(schema.properties)),
+      Object.keys(schema.properties).join(','))
     check('不再有自评置信度（参数与说明里都没有）', !('confidence' in schema.properties) && !/confidence/i.test(toolText))
   } finally {
     env.cleanup()
@@ -148,10 +149,7 @@ section('系统提示段：注册了 workspace-memory，文本是 MEMORY_SECTION
     for (const word of ['skill', 'AGENTS.md', 'AGENTS.local.md', 'README', 'memory_remember']) {
       check(`  …含「${word}」`, mod.MEMORY_SECTION.includes(word))
     }
-    // §14.1（用户拍板）：跨项目的做事与表达要求进全局 AGENTS.md 常驻——段落里写明 scope global + load always
-    for (const word of ['always', 'global']) {
-      check(`  …含「${word}」（常驻去处写进了段落）`, mod.MEMORY_SECTION.includes(word))
-    }
+    check('跨项目偏好进记忆库，AGENTS.md 只由用户写', mod.MEMORY_SECTION.includes('scope 选 global，所有项目都查得到') && mod.MEMORY_SECTION.includes('全局的 AGENTS.md 是用户自己的指令文件'))
     for (const name of [...Object.values(PARAM_RULES), 'WORTH_SAVING', 'HOMES']) {
       check(`  …不含 ${name}（规则只出现在一处）`, !mod.MEMORY_SECTION.includes(mod[name]))
     }
@@ -175,7 +173,7 @@ section('第一轮的片段常量已作废（内容已分散到三层）')
 section('抽取提示词：同一批常量拼成（单一口径守卫）')
 {
   const system = mod.EXTRACTION_SYSTEM
-  for (const name of ['HOMES', 'WORTH_SAVING', 'DESCRIPTION_RULE', 'TYPE_RULES', 'BODY_RULE', 'SOURCE_RULE', 'EVIDENCE_RULE', 'SCOPE_RULE', 'LOAD_RULE']) {
+  for (const name of ['HOMES', 'WORTH_SAVING', 'DESCRIPTION_RULE', 'TYPE_RULES', 'BODY_RULE', 'SOURCE_RULE', 'EVIDENCE_RULE', 'SCOPE_RULE']) {
     check(`EXTRACTION_SYSTEM 含 ${name}`, system.includes(mod[name]))
   }
   check('证据核对不过标为未核实（抽取侧补的一句）', system.includes(`${mod.EVIDENCE_RULE} An item whose evidence is not found is marked unverified.`))
@@ -183,7 +181,7 @@ section('抽取提示词：同一批常量拼成（单一口径守卫）')
   check('不含系统提示段（离线抽取看不到它，也不能提问、不能写文件）', !system.includes(mod.MEMORY_SECTION))
   check('只抽归宿是记忆的', /Extract only items whose home is memory/.test(system))
   check('「多数对话没有可记的」放在最前', system.startsWith('You extract durable memories') && /Most conversations yield none/.test(system.split('\n')[0]))
-  check('字段含 load / source / evidence 与 pitfall 类型', /"load": "on-demand"\|"always"/.test(system) && /"source": "user"\|"agent"/.test(system) && /"evidence": string/.test(system) && /"pitfall"/.test(system))
+  check('字段含 source / evidence 与 pitfall 类型，不声明 load', !/"load":/.test(system) && /"source": "user"\|"agent"/.test(system) && /"evidence": string/.test(system) && /"pitfall"/.test(system))
   check('不再要 confidence', !/confidence/i.test(system))
 }
 

@@ -88,7 +88,8 @@ console.log('\n== 覆盖项确实影响行为（阈值变严后噪声查询仍�
     await mod.rebuildVectors(dir)
     const before = await mod.recall(dir, '今天天气怎么样', 3)
     check('默认阈值下无关查询 0 条', before.results.length === 0, JSON.stringify(before.results.map((r) => r.title)))
-    const hit = await mod.recall(dir, '发布前要跑测试吗', 3)
+    const query = (await mod.resolveEmbedder()) ? '发布前要跑测试吗' : '发布前跑全量测试'
+    const hit = await mod.recall(dir, query, 3)
     check('相关查询能命中', hit.results.length > 0 && hit.results[0].title.includes('发布'), JSON.stringify(hit.results.map((r) => r.title)))
   } finally {
     rmSync(tmp, { recursive: true, force: true })

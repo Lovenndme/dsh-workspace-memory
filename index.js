@@ -250,7 +250,7 @@ const DEFAULT_CONFIG = {
    *
    * 取代旧的置信度门槛：审计里 confidence 19 次有 18 次 ≥0.9，与后来是否被推翻毫无关系，
    * 而「没有用户信号、模型自行总结」的 6 条里 4 条被替换/推翻/删除。来源比自评可靠。
-   * load: always 的 agent 内容不受这个开关影响，永远要人确认（写错影响每个项目的每一轮）。
+   * 仅控制记忆库写入；全局 AGENTS.md 由用户通过面板或明确要求使用文件工具来写。
    */
   agentWrites: 'review',
 
@@ -2432,15 +2432,13 @@ const EXTRACT_TIMEOUT_MS = 60_000
 export const MEMORY_SECTION = [
   '# 记忆与知识沉淀',
   '',
-  // 第四版（设计说明 §14.1，2026-11-15）：用户看了评测题后逐条拍板——规则以 AGENTS.md 为准、项目记忆库不存规则；
-  // 跨项目的做事与表达偏好进全局 AGENTS.md 常驻（scope global + load always，进待确认），推翻了「偏好放按需库就够」；
-  // 「这次」的不记。目标模型评测里另有两处：只纠正一个结果却归纳出做法去记、收工时泛泛地问要不要记一笔。
+  // 2026-11-16：用户决定对齐 Claude Code，自动记的一律进记忆库，全局 AGENTS.md 只由用户写。
+  // 项目规则仍以项目 AGENTS.md 为准；「这次」的不记，只纠正结果时不归纳做法，没有具体内容时不泛泛提议记忆。
   '学到以后还用得上的东西时，先判断它该写到哪：',
   '- 可重复的多步操作流程（怎么部署、怎么排查某类故障、怎么出报表）→ skill，不管是只有你用还是大家都用',
   '- 必须遵守的规则以 AGENTS.md 为准：进这个仓库的人和 agent 都要遵守的 → 项目的 AGENTS.md；只对这位用户成立的项目规则 → 同目录的 AGENTS.local.md。决定仓库里会留下什么的约定（提交说明、代码风格、命名）也算这个仓库的规则。规则不往记忆里存第二份',
-  // 「用户是谁」挪到这一行：用户 2026-11-15 定的常驻范围含「我是做后端的」「只用 Windows」这类，
-  // 代码（resolveLoad）也把 user / feedback + global 一律按常驻处理，文字要与它一致。
-  '- 用户是谁、用户对你做事和表达方式的长期要求，在所有项目都成立的 → 全局 AGENTS.md：调用 memory_remember，scope 选 global、load 选 always，它会进待确认，由用户在面板里收下',
+  // 用户身份与跨项目偏好都写跨项目记忆库，按来源核对后直写或待确认，不再生成常驻草稿。
+  '- 用户是谁、用户对你做事和表达方式的长期要求，在所有项目都成立的 → 记忆：调用 memory_remember，scope 选 global，所有项目都查得到',
   '- 项目说明、用法、设计取舍 → README 或仓库文档',
   '- 其余只有你和这位用户用得上的：代码里看不出的进行中决定与期限、仓库外资源的位置、你验证过的坑 → 记忆（memory_remember）',
   '代码、git 历史、现有文档里已经有的，哪里都不用写。',
@@ -2448,6 +2446,8 @@ export const MEMORY_SECTION = [
   '用户说「以后 / 每次 / 记住 / 默认」只说明这件事要长期保留，去处仍按上面判断；话里明确说了「这次」的，只管这一次，不记。用户指出你的做法或表达不对时，哪怕只说一次、没说「以后」，也要做两件事：当场改正，并把这条做法写下来。只在回复里答应「以后会注意」没有用：下次会话你不记得这次对话，写下来才算数。没有调用 memory_remember 并拿到返回之前，不要对用户说「记下了」；决定先问用户写到哪时，就说明还没记。用户只是指出这次的结果不对（算错了、写错了），改对就行，不要自己归纳出一条做法去记。',
   '',
   'skill、AGENTS.md、README 是共享文件：先说明想写什么、为什么，用户同意后再用文件工具写；用户明确要求时直接写。等用户答复期间不要先往记忆里存一份，否则同一条内容会有两个出处。拿不准去处，或者拿不准是长期规则还是只管这一次，就在回复末尾问用户一句并给出选项；没有具体要记的东西时，不要泛泛地问要不要记点什么。你自己踩到并验证过的坑不用先问，直接存：它会进待确认，由用户决定收不收。只为当前任务服务的指令、进度、中途结论不记。',
+  '',
+  '全局的 AGENTS.md 是用户自己的指令文件，不要主动提议往里写；用户明确要求写进去时，再用文件工具写。',
   '',
   '记忆写的是当时的情况。照着记忆里提到的文件、命令、配置去做之前，先确认它们还在。',
 ].join('\n')
@@ -2487,8 +2487,7 @@ export const SLUG_RULE = 'Short English kebab-case file name: lowercase ASCII wo
 
 /**
  * `description` 参数与抽取提示词共用（第四轮）：按需库的索引每轮注入，每条记忆在索引里只有这一行，
- * 所以这一行要写记忆本身。注意：跨项目的做事 / 表达偏好按用户 2026-11-15 的决定进全局 AGENTS.md 常驻（§14），
- * 不要以「索引行每轮可见」为由把它们留在按需库。
+ * 所以这一行要写记忆本身。2026-11-16：跨项目的做事 / 表达偏好也进记忆库，由 scope 决定适用范围。
  */
 export const DESCRIPTION_RULE =
   "One line (<=120 chars), shown in the index on every turn. State the memory itself (for a rule, the rule), in the user's language."
@@ -2528,14 +2527,6 @@ export const SCOPE_RULE =
   '"global" = holds in any project: who the user is, how they want you to work or communicate. "project" = holds only in this workspace: its decisions, deadlines, resources, pitfalls. When unsure choose "project".'
 
 /**
- * `load` 参数：加载方式与适用范围分开，「处处适用但只在特定场景才用」的知识才有去处。
- * 第五轮：说清按需库的索引行每轮可见，常驻一律等用户确认。
- * §14.2（用户拍板）：跨项目的做事与表达要求放常驻（全局 AGENTS.md），不再是「几乎都放按需库」。
- */
-export const LOAD_RULE =
-  '"always" = a chapter in the user\'s global instructions file (AGENTS.md), injected into every turn of every project; it always waits for the user\'s review. Use it for the user\'s standing requirements about how you work or communicate that hold in every project, and for a trap whose damage cannot be undone. Needs scope "global". "on-demand" (default) = the index line is visible every turn and the body surfaces through recall; use it for everything else.'
-
-/**
  * `supersedes` 参数：审计里 20 次写入有 14 次在 4 个主题上反复改写。
  * 提示词第二版（§12.4）：「什么时候用取代」挪进了工具说明（REMEMBER_DESCRIPTION），这里只留它是什么，避免重复。
  */
@@ -2550,12 +2541,12 @@ export const PATHS_RULE =
  * 抽取是离线的另一次模型调用，看不到系统提示段，所以自己带一份。
  */
 export const HOMES = [
-  // 2026-11-15 按用户的去处决定同步（§14）：规则以 AGENTS.md 为准；跨项目的做事 / 表达偏好进全局 AGENTS.md 常驻。
+  // 2026-11-16 按用户决定对齐 Claude Code：自动记的一律进记忆库，全局 AGENTS.md 只由用户写。
   // 流程的例子换成与评测场景不重合的（原来的 release / verify / migrate 正是三道 skill 题）。
   'FIRST decide where it belongs; memory is one of these homes:',
   '- skill: a repeatable multi-step procedure (how to deploy, troubleshoot a kind of failure, produce a report).',
   "- the project's AGENTS.md: a rule every agent in this repo must follow; a project rule that holds only for this user goes in AGENTS.local.md. Rules are not kept a second time in memory.",
-  "- the global AGENTS.md, through memory: the user's standing requirements about how you work or communicate that hold in every project. Save them with scope \"global\" and load \"always\"; they wait for the user's review.",
+  "- memory with scope \"global\": the user's standing requirements about how you work or communicate that hold in every project. Never put anything in the global AGENTS.md: that file is the user's own.",
   '- README or repo docs: what the project is, how to use it, why it is built this way.',
   '- memory: the rest that only you and this user need: who they are, decisions and deadlines the code cannot show, where outside resources live, traps you verified.',
   'What the code, git history or existing docs already show goes nowhere.',
@@ -2566,14 +2557,14 @@ export const EXTRACTION_SYSTEM = [
   [
     'You extract durable memories from a conversation for a coding agent. Most conversations yield none: return [] and nothing else. That is the normal answer.',
     'Return ONLY a JSON array, no prose. Each element:',
-    '{"slug": string, "title": string, "description": string, "body": string, "type": "user"|"feedback"|"project"|"reference"|"pitfall", "scope": "project"|"global", "load": "on-demand"|"always", "source": "user"|"agent", "evidence": string, "tags": string[]}',
+    '{"slug": string, "title": string, "description": string, "body": string, "type": "user"|"feedback"|"project"|"reference"|"pitfall", "scope": "project"|"global", "source": "user"|"agent", "evidence": string, "tags": string[]}',
     'Field rules:',
     '- "slug": short ENGLISH kebab-case file name (lowercase ascii words joined by hyphens, at most 6 words, no Chinese), e.g. "no-explanatory-text-in-ui". It becomes the file name and the index link text.',
     '- "title": human-readable title in the conversation\'s language (Chinese is fine); it is NOT the file name.',
     `- "description": ${DESCRIPTION_RULE}`,
   ].join('\n'),
   HOMES,
-  "Extract only items whose home is memory (including the global AGENTS.md, which is reached through memory). Something that belongs in a skill, the project's AGENTS.md or AGENTS.local.md, or the README is not a memory: skip it.",
+  "Extract only items whose home is memory. Something that belongs in a skill, the project's AGENTS.md or AGENTS.local.md, the global AGENTS.md, or the README is not a memory: skip it.",
   WORTH_SAVING,
   `type: ${TYPE_RULES}`,
   `body: ${BODY_RULE}`,
@@ -2581,7 +2572,6 @@ export const EXTRACTION_SYSTEM = [
   // 第六轮起核对不过的候选不再丢弃，而是以「未核实」入队；这句要与实际行为一致（原文写的是 dropped）
   `evidence: ${EVIDENCE_RULE} An item whose evidence is not found is marked unverified.`,
   `scope: ${SCOPE_RULE}`,
-  `load: ${LOAD_RULE}`,
 ].join('\n\n')
 
 /**
@@ -2727,10 +2717,6 @@ export async function extractFromTurn(ctx, agent, memoryDir, options = {}) {
         verifyEvidence(userTexts, candidate.evidence).verified &&
         evidenceRelates(candidate.evidence, [candidate.title, candidate.description, candidate.body])
       const scope = candidate.scope === 'global' ? 'global' : 'project'
-      // 「只在本项目成立却要每轮常驻」的归宿是项目 AGENTS.md，插件不写；抽取是离线的没法问，
-      // 降成按需加载入队——面板只能收下或丢弃草稿、不能改它，但按需的去向影响面小，收下了也只多一行索引，比丢掉稳妥。
-      // §15.1：user / feedback + global 的候选一律常驻（与 memory_remember 同一条规则，见 resolveLoad）
-      const load = scope === 'global' ? resolveLoad({ type: candidate.type, scope, load: candidate.load === 'always' ? 'always' : 'on-demand' }).load : 'on-demand'
 
       let vec = null
       let similar = 0
@@ -2758,7 +2744,8 @@ export async function extractFromTurn(ctx, agent, memoryDir, options = {}) {
         title: candidate.title.trim(),
         description: typeof candidate.description === 'string' ? candidate.description : undefined,
         scope,
-        load,
+        // 忽略旧候选里的 load：抽取只生成记忆库草稿，不再生成常驻草稿。
+        load: 'on-demand',
         source,
         ...(source === 'user' && typeof candidate.evidence === 'string' ? { evidence: candidate.evidence } : {}),
         ...(source === 'user' ? { evidenceVerified } : {}),
@@ -2779,45 +2766,29 @@ export async function extractFromTurn(ctx, agent, memoryDir, options = {}) {
 }
 
 /**
+ * 旧调用传了非空 load 时的兼容提示；所有新写入仍只进记忆库。
+ * 这句会接在**任何**结果后面（直写、待确认、拒写、改道），所以不能说「已保存」：
+ * 拒写时说「已保存」，模型就会对用户说「记下了」（目标模型评测 A4 那类误报）。保存与否以前面的结果文字为准。
+ */
+export const LOAD_IGNORED_TEXT =
+  "The load parameter was ignored: this tool only writes memories and never the global AGENTS.md, which is the user's own file. If the user wants this applied in every turn, they can promote it in the memory panel, or ask you to write it there."
+
+/**
  * 判断一次 `memory_remember` 该直接入库还是进待确认。返回 `{ route: 'direct' | 'pending', reason? }`。
  *
  * 按**来源**分流，取代模型自评置信度（审计里它与后来是否被推翻毫无关系）：
  *
- * | source | 证据核对 | load      | 结果 |
- * |--------|----------|-----------|------|
- * | 任意   | —        | always    | pending, always-needs-user |
- * | user   | 通过     | on-demand | 直写 |
- * | user   | 未通过   | on-demand | pending, evidence-not-found |
- * | agent  | —        | on-demand | agentWrites=direct 直写，否则 pending, agent-review |
+ * | source | 证据核对 | 结果 |
+ * |--------|----------|------|
+ * | user   | 通过     | 直写 |
+ * | user   | 未通过   | pending, evidence-not-found |
+ * | agent  | —        | agentWrites=direct 直写，否则 pending, agent-review |
  *
- * 常驻一律进待确认（第五轮）：AGENTS.md 每轮注入所有项目，写错影响面最大；而证据核对只能证明「这几个字出自用户」，
- * 证明不了用户想把它变成处处常驻的规则。`agentWrites: 'direct'` 也不影响这一行。
+ * 2026-11-16：写入一律按需，scope 只决定项目库或跨项目库，旧 load 实参不再参与分流。
  * `source` 缺失或非法按 agent 处理：说不清是谁说的，就当模型自己得出的。
  * 抽成纯函数是为了能用 Node 直接验证分流表。
  */
-/**
- * §15.1：type 是 user / feedback、scope 是 global 的，按定义就是「用户在所有项目都成立的做事 / 表达要求」；
- * 用户决定这类一律进全局 AGENTS.md 常驻，所以由代码判定，不再交给模型选——目标模型评测里三次在回复里说
- * 「已记到全局偏好」，load 却留在 on-demand（或没给），条目进了按需库。memory_remember 与自动抽取共用这一条。
- */
-export const ALWAYS_TYPES = ['user', 'feedback']
-
-/**
- * 解析最终的加载方式。`scope` 是解析默认值之后的值；`load` 是调用方给的原值（空白 = 没给）。
- * 返回 `{ load, forced }`：forced = 调用方**显式**给了 on-demand 而被改成 always（没给时不算覆盖）。
- */
-export function resolveLoad({ type, scope, load } = {}) {
-  const given = isBlank(load) ? '' : load
-  if (scope === 'global' && ALWAYS_TYPES.includes(type)) return { load: 'always', forced: given === 'on-demand' }
-  return { load: given || 'on-demand', forced: false }
-}
-
-/** 覆盖了模型选的 on-demand 时，返回文本里加的那一句（§15.1）。 */
-export const LOAD_FORCED_TEXT =
-  'Handled with load "always", not "on-demand": a user or feedback memory with scope "global" is a standing requirement about how you work or communicate that holds in every project, so by rule it goes into the global AGENTS.md and waits for the user\'s confirmation.'
-
-export function rememberRoute({ source, verified, load } = {}) {
-  if (load === 'always') return { route: 'pending', reason: 'always-needs-user' }
+export function rememberRoute({ source, verified } = {}) {
   if (source === 'user') return verified === true ? { route: 'direct' } : { route: 'pending', reason: 'evidence-not-found' }
   return CONFIG.agentWrites === 'direct' ? { route: 'direct' } : { route: 'pending', reason: 'agent-review' }
 }
@@ -5198,8 +5169,8 @@ export const REMEMBER_OUTPUT_SCHEMA = {
     home: { type: 'string', enum: ['skill', 'agents', 'readme'] },
     // type 选了改道取值，但 supersedes 指向一条已有记忆：没有改道，作为记忆更新
     keptAsMemory: SCHEMA_BOOLEAN,
-    // type 是 user / feedback、scope 是 global，调用方显式给了 load: on-demand，被按规则改成 always（§15.1）
-    loadForced: SCHEMA_BOOLEAN,
+    // 旧调用传了非空 load：该参数已忽略，所有新写入只进记忆库。
+    loadIgnored: SCHEMA_BOOLEAN,
     updated: SCHEMA_BOOLEAN,
     chars: SCHEMA_NUMBER,
     count: SCHEMA_NUMBER,
@@ -5311,7 +5282,7 @@ const isBlank = (value) => value === undefined || value === null || (typeof valu
  * 宿主不会替我们挡 required / enum：
  *   · title / body 必须是非空字符串（空正文的记忆只会白占一行索引）；
  *   · type 缺失或不在枚举里 → 拒写并列出允许值（以前静默回落成 project，分类就悄悄错了）；
- *   · scope / load 缺省（含空白串）取默认值，给了非法值 → 拒写（以前非法值静默当成默认值，写到模型没想要的去处）；
+ *   · scope 缺省（含空白串）取默认值，给了非法值 → 拒写；旧 load 实参忽略，不校验也不影响去向；
  *   · source 缺失或非法不在这里拒：按 agent 处理（进待确认），见 rememberRoute。
  */
 export function checkRememberArgs(args) {
@@ -5341,9 +5312,6 @@ export function checkRememberArgs(args) {
   }
   if (!isBlank(input.scope) && input.scope !== 'project' && input.scope !== 'global') {
     return refuse('scope', `scope ${shown(input.scope)} is not valid.`, ['project', 'global'])
-  }
-  if (!isBlank(input.load) && !MEMORY_LOADS.includes(input.load)) {
-    return refuse('load', `load ${shown(input.load)} is not valid.`, MEMORY_LOADS)
   }
   return null
 }
@@ -6054,20 +6022,8 @@ export function apply(ctx, rawConfig) {
     return { ...result, keptAsMemory: true, text }
   }
 
-  /**
-   * 调用方显式给了 load: on-demand、被按 §15.1 改成 always：返回值带 loadForced: true，文本加 LOAD_FORCED_TEXT。
-   * 常驻分支的每种结果都带（进待确认、needs-confirmation、chapter-not-found、agents-missing……）——
-   * 模型要知道为什么自己选的按需变成了章节协议。那句同样放在过期值提示之前（§4.6）。
-   */
-  const withLoadForced = (result, staleTail) => {
-    if (!result || typeof result.text !== 'string') return result
-    const note = ` ${LOAD_FORCED_TEXT}`
-    const text =
-      staleTail && result.text.endsWith(staleTail)
-        ? `${result.text.slice(0, result.text.length - staleTail.length)}${note}${staleTail}`
-        : `${result.text}${note}`
-    return { ...result, loadForced: true, text }
-  }
+  /** 兼容旧 load 实参：提示放在整段返回文本末尾，包括过期值提示之后。 */
+  const withLoadIgnored = (result) => ({ ...result, loadIgnored: true, text: `${result.text} ${LOAD_IGNORED_TEXT}` })
 
   /** 库的人话名字（写进工具返回文本）。 */
   const libraryLabel = (scope) => (scope === 'global' ? 'the all-projects on-demand library (scope "global")' : "this workspace's library (scope \"project\")")
@@ -6093,21 +6049,13 @@ export function apply(ctx, rawConfig) {
             tags: stringArraySchema,
             paths: { ...stringArraySchema, description: PATHS_RULE },
             scope: { type: 'string', enum: ['project', 'global'], description: SCOPE_RULE },
-            load: { type: 'string', enum: MEMORY_LOADS, description: LOAD_RULE },
             supersedes: { type: 'string', description: SUPERSEDES_RULE },
             newMemory: {
               type: 'boolean',
-              description: 'Only with load "on-demand". Set true to confirm this is a separate memory after a refusal listed similar ones.',
+              description: 'Set true to confirm this is a separate memory after a refusal listed similar ones.',
             },
-            chapter: {
-              type: 'number',
-              description:
-                'Only with load "always". The 1-based AGENTS.md chapter to overwrite with this content; merge old and new into body yourself.',
-            },
-            newChapter: {
-              type: 'boolean',
-              description: 'Only with load "always". Set true to confirm this is a new topic, not an existing chapter under another title.',
-            },
+            // 2026-11-16 起没有常驻写入：chapter / newChapter（只配 load "always" 用）随 load 一起删除。
+            // 旧常驻草稿里的 chapter / newChapter 仍由 acceptPending 照常读取。
           },
           // scope 也必填（§12.3）；宿主不校验 required，execute 里缺失仍取默认 project
           required: ['slug', 'title', 'body', 'type', 'source', 'scope'],
@@ -6115,14 +6063,14 @@ export function apply(ctx, rawConfig) {
         },
         output: textOutput(REMEMBER_OUTPUT_SCHEMA),
         async execute(rawArgs, exec) {
+          const input = rawArgs && typeof rawArgs === 'object' ? rawArgs : {}
+          const reply = (result) => (!isBlank(input.load) ? withLoadIgnored(result) : result)
           try {
-            const input = rawArgs && typeof rawArgs === 'object' ? rawArgs : {}
-
             // —— 0) 入参自行校验：直接注册的 raw JSON-Schema 工具自己负责校验输入
             //        （官方 tools.md：「a raw ToolDefinition validates its own input」，宿主不替我们挡）——
             // 放在最前面：校验失败时一个字都不写，连工作区都不用解析。
             const invalid = checkRememberArgs(input)
-            if (invalid) return invalid
+            if (invalid) return reply(invalid)
 
             // —— 归类是第一道判断（§13.2）：type 是流程 / 全仓库规则 / 项目文档时什么都不保存——不进库、不进待确认、
             // 不做证据核对、不查重，也不因为缺 slug / source / evidence 先返回别的拒写——只告诉模型该写到哪。
@@ -6132,14 +6080,13 @@ export function apply(ctx, rawConfig) {
             // 加载方式固定为 on-demand（被取代的条目在按需库里；常驻会把这次更新引到 AGENTS.md，旧条照样留着）。
             let args = input
             let keptFor = null // 因为在更新已有记忆而没有改道：被取代的那条记忆的 id
-            let loadForced = false // 调用方显式给的 on-demand 被按 §15.1 改成了 always
             if (ROUTED_TYPES.includes(input.type)) {
               const wanted = String(input.supersedes ?? '').trim()
               const existing = wanted
                 ? keptAsMemoryTarget(memoryDirOf(ctx, { agent: exec?.agent }), isBlank(input.scope) ? 'project' : input.scope, wanted)
                 : null
-              if (!existing) return routedReply(input.type, instructionsRootOf(ctx, { agent: exec?.agent }))
-              args = { ...input, type: MEMORY_TYPES.includes(existing.meta?.type) ? existing.meta.type : 'project', load: 'on-demand' }
+              if (!existing) return reply(routedReply(input.type, instructionsRootOf(ctx, { agent: exec?.agent })))
+              args = { ...input, type: MEMORY_TYPES.includes(existing.meta?.type) ? existing.meta.type : 'project' }
               keptFor = existing.id
             }
 
@@ -6147,14 +6094,10 @@ export function apply(ctx, rawConfig) {
               const memoryDir = memoryDirOf(ctx, { agent: exec?.agent })
               if (!memoryDir) return { text: '无法定位工作区记忆库：当前会话没有可用工作目录。' }
 
-              // —— 三个独立的选择：适用范围、加载方式、来源 ——
-              // scope / load 缺省（含空串）取默认值，给了非法值已在上面拒掉；source 缺失或非法按 agent 处理。
+              // —— 适用范围与来源；所有新写入固定为按需，忽略旧 load 实参 ——
+              // scope 缺省（含空串）取默认值，给了非法值已在上面拒掉；source 缺失或非法按 agent 处理。
               const scope = isBlank(args.scope) ? 'project' : args.scope
-              // §15.1：user / feedback + global 一律常驻（resolveLoad），之后走现有的常驻分支。
-              // 「更新留在原处」（keptFor）不受影响：被取代的记忆在按需库里，更新仍按按需处理。
-              const resolved = keptFor ? { load: isBlank(args.load) ? 'on-demand' : args.load, forced: false } : resolveLoad({ type: args.type, scope, load: args.load })
-              const load = resolved.load
-              loadForced = resolved.forced
+              const load = 'on-demand'
               const source = args.source === 'user' ? 'user' : 'agent'
               const evidence = source === 'user' && typeof args.evidence === 'string' ? args.evidence.trim() : ''
 
@@ -6163,17 +6106,8 @@ export function apply(ctx, rawConfig) {
               const staleTail = stalenessNote(stale)
               const staleField = stale.length > 0 ? { staleValues: stale } : {}
 
-              // —— 1) 只在本项目成立却要每轮常驻：归宿是项目自己的 AGENTS.md，插件不写 ——
-              if (scope === 'project' && load === 'always') {
-                return {
-                  reason: 'belongs-in-project-agents',
-                  written: false,
-                  text: projectAgentsText(instructionsRootOf(ctx, { agent: exec?.agent })),
-                }
-              }
-
-              // —— 分流：按来源，不按自评置信度；常驻一律进待确认（rememberRoute）——
-              // source: user 时**总是**核对一次证据（第六轮：常驻写入也做——它照样进待确认，核对结果只用于记录），
+              // —— 分流：按来源，不按自评置信度（rememberRoute）——
+              // source: user 时总是核对一次证据，
               // 两道都过才算核实：
               //   ① 找得到原话：先读 pre-step 缓存，没通过再回落到会话快照（verifyEvidenceFrom）；
               //   ② 原话与这条记忆的文字沾边（evidenceRelates：标题、摘要、正文）——挡「好的，继续」当证据。
@@ -6198,7 +6132,7 @@ export function apply(ctx, rawConfig) {
                 }
                 verified = check.verified && related
               }
-              const route = rememberRoute({ source, verified, load })
+              const route = rememberRoute({ source, verified })
               // 原因码仍是 evidence-not-found。文案中性（第六轮）：只说没在用户消息里核对到，
               // 不说「要与标题共享词语」——那等于教模型把用户的话抄进标题来绕过。「没给证据」单独一句。
               const reasonText =
@@ -6221,92 +6155,29 @@ export function apply(ctx, rawConfig) {
                 ...(evidence ? { evidence } : {}),
                 ...verifiedField,
               }
-              // plan：常驻草稿收下后写到哪一章（planAgentsChapter 的结果）；按需草稿不传。
-              // 常驻草稿的 target 是 { id, scope }：收下时先写 AGENTS.md，写成功后把这条旧记忆归档删除（第十一轮）
-              const destination = (plan) =>
-                `${load === 'always' ? agentsFileDisplay() : libraryLabel(scope)}` +
-                `${plan?.action === 'updated' ? `, replacing chapter "${plan.chapterTitle}" (now chapter ${plan.chapter})` : plan?.action === 'added' ? ' as a new chapter' : ''}`
-              const acceptingText = (target, fromScope, plan) =>
-                load === 'always'
-                  ? `Accepting it writes it into ${destination(plan)}` +
-                    `${target ? ` and then deletes the old memory ${target.id} from ${libraryLabel(target.scope)} (its body is archived in history/ first)` : ''}.`
-                  : `Accepting it ${target ? `will replace ${target.id}${fromScope ? ` (now in ${libraryLabel(fromScope)})` : ''} and ` : ''}writes it into ${destination(plan)}.`
-              const pendingReply = (queued, target, fromScope, plan) => ({
+              const acceptingText = (target, fromScope) =>
+                `Accepting it ${target ? `will replace ${target.id}${fromScope ? ` (now in ${libraryLabel(fromScope)})` : ''} and ` : ''}writes it into ${libraryLabel(scope)}.`
+              const pendingReply = (queued, target, fromScope) => ({
                 id: queued.id,
                 file: path.relative(memoryDir, queued.file),
                 pending: true,
                 reason: route.reason,
                 scope,
                 load,
-                ...(plan?.action === 'updated' ? { chapter: plan.chapter } : {}),
                 ...(queued.replacedDraft ? { replacedDraft: queued.replacedDraft } : {}),
                 ...(queued.sameSlugDrafts ? { sameSlugDrafts: queued.sameSlugDrafts } : {}),
                 ...verifiedField,
                 ...staleField,
                 text:
                   `Queued as pending ${queued.id}: ${reasonText} ${PENDING_TELL_TEXT} ` +
-                  acceptingText(target, fromScope, plan) +
+                  acceptingText(target, fromScope) +
                   `${queued.replacedDraft ? ` It overwrote the earlier draft ${queued.replacedDraft} with the same slug and intent.` : ''}` +
                   // 同 slug、意图不同的草稿没被覆盖，两条都在队列里：点名，免得人两条都收下
                   `${queued.sameSlugDrafts ? ` Another pending draft with the same slug but a different destination or replacement target is still queued: ${queued.sameSlugDrafts.join(', ')}.` : ''}` +
                   staleTail,
               })
 
-              // —— 2) 跨项目 + 常驻：~/.dsh/AGENTS.md 的一章，一律进待确认（第五轮）——
-              // AGENTS.md 每轮注入所有项目，写错影响面最大；证据核对只能证明「这几个字出自用户」，
-              // 证明不了用户要把它变成处处常驻的规则——所以不论来源、不论证据，都等用户在面板里收下。
-              // 章节协议（更新第 N 章 / 标题同名 / newChapter）在进队列**之前**校验，照旧按原因码拒写；
-              // 通过后把章号与当时那一章的标题存进草稿，收下时核对（acceptPending），不会再变成「新章追加、出现两份」。
-              if (load === 'always') {
-                // 取代按需库里的旧条（第十一轮）：跨项目偏好以全局 AGENTS.md 为唯一出处，旧的按需条目不能留着——
-                // 否则收下后同一条偏好有两个出处（第十轮复现：强制常驻 + supersedes，收下后旧条仍在全局按需库）。
-                // 解析规则与按需写入相同（lookupSuperseded），解析不到照样拒写；现在什么都不动，被取代条目的 id 与所在库记进草稿，
-                // 收下时先写章节、写成功后再归档删除（acceptPending）。
-                const wantedOld = String(args.supersedes ?? '').trim()
-                let superseded = null
-                if (wantedOld) {
-                  const found = lookupSuperseded(memoryDir, scope, wantedOld)
-                  if (found.refusal) return found.refusal
-                  superseded = { id: found.target.id, scope: found.crossFrom ? found.crossFrom.scope : scope }
-                }
-                const plan = planAgentsChapter({ title: args.title, chapter: args.chapter, newChapter: args.newChapter })
-                if (!plan.ok) {
-                  // 语义重复的拦截：把清单交回去，让调用方自己比一遍再决定
-                  if (plan.reason === 'needs-confirmation') {
-                    // 章标题在文件里本身带编号（「1. 安全」），以前列表又加一遍成了「1. 1. 安全」，模型可能拿错 chapter 值。
-                    // 只留一个编号，而且它就是调用方该传的 chapter：第 N 个 `##` 章（与 planAgentsChapter 的口径相同），
-                    // 不是文件里写的那个数字——文件编号断号或没编号时两者不一样。
-                    const list = plan.chapters.map((title, i) => `${i + 1}. ${stripChapterNumber(title)}`).join('\n')
-                    return {
-                      reason: 'needs-confirmation',
-                      written: false,
-                      text:
-                        'NOT written: no existing chapter has this exact title, and this is a global file injected into every ' +
-                        'project, so a duplicate must not be added silently.\n\n' +
-                        `Existing chapters:\n${list}\n\n` +
-                        'If one of them is the same topic, call again with chapter: <number> and a body that merges old and new. ' +
-                        'If this really is a new topic, call again with newChapter: true.',
-                    }
-                  }
-                  if (plan.reason === 'chapter-not-found') {
-                    return {
-                      reason: 'chapter-not-found',
-                      written: false,
-                      text: `NOT written: ${agentsFileDisplay()} has no chapter ${plan.chapter} (it has ${plan.total}). Pass an existing chapter number, or newChapter: true for a new topic.`,
-                    }
-                  }
-                  return { reason: plan.reason ?? 'write-failed', written: false, text: `NOT written: ${agentsFileDisplay()} cannot take this chapter (${plan.reason ?? 'unknown'}).` }
-                }
-                const queued = queuePending(memoryDir, {
-                  ...draftFields,
-                  slug: args.slug,
-                  ...(plan.action === 'updated' ? { chapter: plan.chapter, chapterTitle: plan.chapterTitle } : { newChapter: true }),
-                  ...(superseded ? { supersedes: superseded.id, supersedesScope: superseded.scope } : {}),
-                })
-                return pendingReply(queued, superseded, null, plan)
-              }
-
-              // —— 3) 两个按需库共用的流程：needs-slug → supersedes → 查重 → 条数上限 → 分流 → 写入 ——
+              // —— 两个按需库共用的流程：needs-slug → supersedes → 查重 → 条数上限 → 分流 → 写入 ——
               const libraries = librariesFor(memoryDir)
               const targetDir = libraryDir(memoryDir, scope)
               const other = libraries.find((library) => library.scope !== scope)
@@ -6328,7 +6199,7 @@ export function apply(ctx, rawConfig) {
               }
 
               // 取代谁：先在目标库里找，找不到再到另一个按需库里找（跨库取代，见下面「分流」之后的搬移）。
-              // 解析规则见 lookupSuperseded（与常驻写入共用）。
+              // 解析规则见 lookupSuperseded：本库允许唯一前缀，跨库只接受精确 id。
               let target
               let crossFrom // 被取代的条目在另一个库里时，记下那个库：直写前先用 moveMemory 搬过来
               const wanted = String(args.supersedes ?? '').trim()
@@ -6521,11 +6392,10 @@ export function apply(ctx, rawConfig) {
               }
             })()
             const staleTail = stalenessNote(stalenessHints(args.body, args.type))
-            if (keptFor) return withKeptAsMemory(result, keptFor, staleTail)
-            return loadForced ? withLoadForced(result, staleTail) : result
+            return reply(keptFor ? withKeptAsMemory(result, keptFor, staleTail) : result)
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error)
-            return { text: `Could not save the memory: ${detail}` }
+            return reply({ text: `Could not save the memory: ${detail}` })
           }
         },
       }),
@@ -6742,7 +6612,7 @@ export function apply(ctx, rawConfig) {
             const checkState = lastCheck ? (lastCheck.missing ? 'no evidence given' : lastCheck.verified ? 'verified' : 'not verified') : ''
             lines.push(
               `pending drafts: ${listPending(memoryDir).length}`,
-              `agentWrites: ${CONFIG.agentWrites} (${CONFIG.agentWrites === 'direct' ? 'agent-sourced on-demand writes go straight in' : 'agent-sourced writes wait in the review queue'}; load "always" always waits for review)`,
+              `agentWrites: ${CONFIG.agentWrites} (${CONFIG.agentWrites === 'direct' ? 'agent-sourced on-demand writes go straight in' : 'agent-sourced writes wait in the review queue'})`,
               `embedder: ${embedder ? 'leanvec (dim 256)' : 'unavailable -> keyword-only recall'}`,
               `recall: minVector=${CONFIG.minVectorScore} minKeyword=${CONFIG.minKeywordScore} weights=${CONFIG.weightVector}/${CONFIG.weightKeyword}`,
               `extraction: ${CONFIG.enableExtraction ? 'on' : 'off'}`,
@@ -7145,9 +7015,10 @@ async function overviewText(ctx, invocation, memoryDir) {
       : '每轮没有固定带上的内容',
     '',
     embedder ? '检索：向量 + 关键词' : '检索：只用关键词（装上 leanvec 能认出换个说法的问题）',
+    // agentWrites=direct 时 Agent 总结的直接入库，不能说成「先进待确认」
     CONFIG.agentWrites === 'direct'
-      ? '写入：Agent 自己总结的记忆直接存；要写进全局指令的仍先进待确认'
-      : '写入：Agent 自己总结的、要写进全局指令的，都先进待确认',
+      ? '写入：Agent 自己总结的记忆直接存；全局指令和项目指令只由你来写'
+      : '写入：Agent 自己总结的先进待确认；全局指令和项目指令只由你来写',
     '/memory_list 打开面板 · /memory help 查看全部子命令',
   )
   return lines.join('\n')

@@ -53,26 +53,14 @@ export function routedHomeOf(call) {
  * 主结果是否在 accept 内。
  *   · `routed:<home>` 与 `propose:<home>`、`file:<home>` 同等对待：场景的 accept 里有其中之一，
  *     改道到同一个归宿也算对（不改场景文件，在这里做等价）；
- *   · `remember:always`（2026-11-15 按用户决定新增）：主结果是 remember，且计入的那次成功调用是常驻写入
- *     （见 isAlwaysWrite）。`remember` 仍接受任何成功的写入。
+ *   · 所有成功的记忆写入都按 remember 判断，不再按常驻与按需分类。
  */
-export function acceptIncludes(accept, main, { always = false } = {}) {
+export function acceptIncludes(accept, main) {
   const list = Array.isArray(accept) ? accept : []
   if (list.includes(main)) return true
-  if (main === 'remember' && always && list.includes('remember:always')) return true
   const routed = /^routed:(.+)$/.exec(String(main ?? ''))
   if (routed) return list.includes(`propose:${routed[1]}`) || list.includes(`file:${routed[1]}`)
   return false
-}
-
-/**
- * 计入的那次成功调用是不是常驻写入（进全局 AGENTS.md）：`load` 为 `always`。
- * 旧版插件的 schema 里没有 `load`，它的 `scope: global` 就是写 AGENTS.md，视同常驻。
- */
-export function isAlwaysWrite(schemaProps, call) {
-  if (!call) return false
-  if (schemaProps?.load) return effectiveField(schemaProps, call.args, 'load') === 'always'
-  return effectiveField(schemaProps, call.args, 'scope') === 'global'
 }
 
 /* ------------------------------------------------------------- 归类 */
@@ -231,11 +219,9 @@ export function askSentence(text) {
 export function errorKindOf(kase, main, inAccept) {
   if (inAccept) return null
   const accept = kase.accept ?? []
-  const memoryAccepted = accept.includes('remember') || accept.includes('remember:always')
+  const memoryAccepted = accept.includes('remember')
   if (kase.polarity === 'positive' && main === 'none') return '漏记'
   if (kase.polarity === 'negative' && main === 'remember') return '误记'
-  // 「去处错（应常驻）」（2026-11-15）：该常驻的偏好记进了按需库——记了，但下次不会自动生效
-  if (main === 'remember' && accept.includes('remember:always') && !accept.includes('remember')) return '去处错（应常驻）'
   if (String(main).startsWith('routed:') && memoryAccepted) return '错改道'
   if (kase.destination && main === 'remember') return '归宿错'
   return '其他错'
@@ -411,9 +397,8 @@ export function scoreRow(kase, row, schemaProps, { seedChapters = 0 } = {}) {
   delete row.constraints
 
   const classified = classifyRun(row)
-  // 计入的那次成功调用（第一次直写或进待确认）以及它是不是常驻写入：remember:always 要用
+  // 计入的那次成功调用（第一次直写或进待确认）；旧结果重算也不再推断常驻。
   const first = primaryWrite(row.rememberCalls)
-  const always = isAlwaysWrite(schemaProps, first)
   // 截断：步数用尽、且此前没有 remember / file:* 动作——不知道它本来会怎么收尾，
   // 既不算对也不算错，从处理率、漏记、误记、归宿的分子分母里都剔除（2026-11-14 协调决定）
   if (row.stepsExhausted && !classified.main.startsWith('file:') && classified.main !== 'remember') {
@@ -425,14 +410,13 @@ export function scoreRow(kase, row, schemaProps, { seedChapters = 0 } = {}) {
   } else {
     row.main = classified.main
     row.mainEvidence = classified.evidence
-    // routed:<home> 与 propose:<home> / file:<home> 同等对待；remember:always 要求常驻（acceptIncludes）
-    row.inAccept = acceptIncludes(kase.accept, row.main, { always })
+    // routed:<home> 与 propose:<home> / file:<home> 同等对待，记忆写入不再细分常驻。
+    row.inAccept = acceptIncludes(kase.accept, row.main)
     row.errorKind = errorKindOf(kase, row.main, row.inAccept)
   }
 
   if (row.main === 'remember' && first) {
     row.primaryWrite = {
-      always,
       outcome: first.outcome,
       type: effectiveField(schemaProps, first.args, 'type'),
       scope: effectiveField(schemaProps, first.args, 'scope'),

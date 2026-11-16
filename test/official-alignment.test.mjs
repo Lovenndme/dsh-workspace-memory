@@ -70,7 +70,7 @@ section('dshHome()：$DSH_HOME 非空白就用它，否则 ~/.dsh')
   check('用完恢复了环境变量（原来没设就还是没设）', envAfter === envBefore, `${JSON.stringify(envBefore)} → ${JSON.stringify(envAfter)}`)
 }
 
-section('入参自行校验：type 必填且在枚举里；scope / load 缺省取默认、非法拒写；source 非法按 agent')
+section('入参自行校验：type 必填且在枚举里；scope 缺省取默认、非法拒写；load 忽略；source 非法按 agent')
 {
   const h = makeHost(mod, { config: { duplicateCheck: false, agentWrites: 'review' } })
   try {
@@ -86,14 +86,14 @@ section('入参自行校验：type 必填且在枚举里；scope / load 缺省�
     check('type 不在枚举里 → invalid-argument（以前静默回落成 project）', badType.reason === 'invalid-argument' && badType.argument === 'type' && /"lesson"/.test(badType.text), JSON.stringify(badType))
     const badScope = await h.tool('memory_remember', { ...base, type: 'project', scope: 'workspace' })
     check('scope 非法 → invalid-argument（以前静默当成 project）', badScope.reason === 'invalid-argument' && badScope.argument === 'scope' && badScope.allowed?.join() === 'project,global', JSON.stringify(badScope))
-    const badLoad = await h.tool('memory_remember', { ...base, type: 'project', scope: 'global', load: 'sometimes' })
-    check('load 非法 → invalid-argument（以前静默当成 on-demand）', badLoad.reason === 'invalid-argument' && badLoad.argument === 'load' && badLoad.allowed?.join() === 'on-demand,always', JSON.stringify(badLoad))
     const noBody = await h.tool('memory_remember', { ...base, type: 'project', body: '   ' })
     check('body 空白 → invalid-argument', noBody.reason === 'invalid-argument' && noBody.argument === 'body', JSON.stringify(noBody))
     const noTitle = await h.tool('memory_remember', { ...base, type: 'project', title: 42 })
     check('title 不是字符串 → invalid-argument', noTitle.reason === 'invalid-argument' && noTitle.argument === 'title', JSON.stringify(noTitle))
     check('  …以上都一个字没写（两个库、待确认队列）', nothingWritten())
 
+    const badLoad = await h.tool('memory_remember', { ...base, type: 'project', scope: 'global', load: 'sometimes' })
+    check('旧 load 任意值忽略，按需入队', badLoad.pending === true && badLoad.load === 'on-demand' && badLoad.loadIgnored === true && badLoad.text.endsWith(mod.LOAD_IGNORED_TEXT), JSON.stringify(badLoad))
     const defaults = await h.tool('memory_remember', { ...base, type: 'project' })
     check('scope / load 缺省 → project + on-demand（进项目库的待确认）', defaults.pending === true && defaults.scope === 'project' && defaults.load === 'on-demand', JSON.stringify(defaults))
     const blanks = await h.tool('memory_remember', { ...base, slug: 'blank-choices', title: 'Blank choices', type: 'project', scope: '', load: '  ' })
@@ -314,8 +314,8 @@ section('dshHomeDisplay()：默认显示 ~/.dsh，配置过显示 $DSH_HOME；�
     mkdirSync(custom, { recursive: true })
     h.write(path.join(custom, 'AGENTS.md'), '# 全局\n\n## 1. 已有的一章\n\n内容\n') // 常驻写入在入队前要读章节清单
     const configured = await h.tool('memory_remember', { slug: 'always-b', title: 'Always B', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
-    check('设了 DSH_HOME：文字写 $DSH_HOME/AGENTS.md，不出现绝对路径', /writes it into \$DSH_HOME\/AGENTS\.md/.test(configured.text) && !configured.text.includes(custom), configured.text)
-    check('  …文案用的就是 dshHomeDisplay()（没设时它返回 ~/.dsh，见上）', configured.text.includes(`${mod.dshHomeDisplay()}/AGENTS.md`))
+    check('旧 load 不再把去向说成 AGENTS.md，文本没有泄露主目录', configured.load === 'on-demand' && configured.text.endsWith(mod.LOAD_IGNORED_TEXT) && !configured.text.includes(custom), configured.text)
+    check('自定义主目录下 AGENTS.md 未变', h.read(path.join(custom, 'AGENTS.md')) === '# 全局\n\n## 1. 已有的一章\n\n内容\n')
   } finally {
     if (had) process.env.DSH_HOME = saved
     else delete process.env.DSH_HOME

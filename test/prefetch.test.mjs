@@ -112,7 +112,8 @@ const seed = (env, id, title, description, body) =>
 const userMessage = (text) => [{ role: 'user', source: { kind: 'user' }, content: text }]
 
 // 这条消息实测能过闸门（融合分 0.40）；换说法会掉到闸门以下，见金标集里 pos-npm-cadence 的已知未命中
-const HIT_MESSAGE = '发版的时候版本号应该什么时候改'
+// 无向量时用实际存在的词验证事件与缓存，不要求关键词检索理解改述。
+const HIT_MESSAGE = (await mod.resolveEmbedder()) ? '发版的时候版本号应该什么时候改' : 'npm 发布'
 
 console.log('== 相关的用户消息 → 注入里列出相关记忆 ==')
 {

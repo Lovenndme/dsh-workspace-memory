@@ -18,7 +18,7 @@ import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件�
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { AGENT, makeHost, makeReporter, realFilesGuard, userEvent } from './fake-host.mjs'
+import { AGENT, makeHost, makeReporter, realFilesGuard, userEvent, legacyAlwaysDraft } from './fake-host.mjs'
 import { BYPASSES, CORRECTIONS, UNRELATED } from './relates-samples.mjs'
 
 const mod = await import('../index.js')
@@ -136,8 +136,8 @@ section('N4 evidenceVerified：草稿 → 列表接口 → 收下后的正式记
     a.state.events.push(userEvent('以后所有项目都用中文回答我'))
     const yes = await a.tool('memory_remember', { slug: 'zh-all', title: '所有项目都用中文回答', body: '始终用中文回答。', type: 'feedback', source: 'user', evidence: '以后所有项目都用中文回答我', scope: 'global', load: 'always', newChapter: true })
     const no = await a.tool('memory_remember', { slug: 'force', title: '总是强推', body: 'git push --force', type: 'feedback', source: 'user', evidence: '你以后推送一律加 --force', scope: 'global', load: 'always', newChapter: true })
-    check('常驻写入也核对一次：核对到的草稿 evidenceVerified: true', yes.pending === true && yes.reason === 'always-needs-user' && yes.evidenceVerified === true, JSON.stringify(yes))
-    check('  …核对不到的 evidenceVerified: false（照样进待确认）', no.pending === true && no.reason === 'always-needs-user' && no.evidenceVerified === false, JSON.stringify(no))
+    check('旧 always + 核实原话 → 直写跨项目库，evidenceVerified: true', !yes.pending && yes.scope === 'global' && yes.evidenceVerified === true && yes.loadIgnored === true && a.read(a.agentsFile) === '# 全局\n', JSON.stringify(yes))
+    check('  …核对不到的 evidenceVerified: false，按需待确认', no.pending === true && no.reason === 'evidence-not-found' && no.load === 'on-demand' && no.evidenceVerified === false, JSON.stringify(no))
     const listed = (await a.http(`${API}/list`)).body.pending.find((d) => d.id === no.id)
     check('  …列表接口给面板 false（面板不再把它标成「用户原话」）', listed?.evidenceVerified === false, JSON.stringify(listed))
     const status = await a.tool('memory_status', {})
@@ -177,7 +177,7 @@ section('N2 章节草稿按标题定位：删掉前面的章之后仍能收下')
   const h = makeHost(mod, { config: { agentWrites: 'review' } })
   try {
     h.write(h.agentsFile, AGENTS3)
-    const q = await h.tool('memory_remember', { slug: 'merge-b', title: '乙章（合并版）', body: '乙内容\n补充', type: 'feedback', source: 'agent', scope: 'global', load: 'always', chapter: 2 })
+    const q = legacyAlwaysDraft(mod, h, { slug: 'merge-b', title: '乙章（合并版）', body: '乙内容\n补充', type: 'feedback', source: 'agent', scope: 'global', load: 'always', chapter: 2 })
     mod.deleteAgentsSection(0, { expectedTitle: '1. 甲章' }) // 用户删掉第 1 章：乙章变成第 1 章
     const acc = await mod.acceptPending(h.memoryDir, q.id, { globalDir: h.globalDir })
     const titles = mod.readAgentsDocument().sections.map((s) => s.title)
@@ -189,7 +189,7 @@ section('N2 章节草稿按标题定位：删掉前面的章之后仍能收下')
   const ws = makeHost(mod, { config: { agentWrites: 'review' } })
   try {
     ws.write(ws.agentsFile, AGENTS3)
-    const q = await ws.tool('memory_remember', { slug: 'merge-b', title: '乙章（合并版）', body: '新', type: 'feedback', source: 'agent', scope: 'global', load: 'always', chapter: 2 })
+    const q = legacyAlwaysDraft(mod, ws, { slug: 'merge-b', title: '乙章（合并版）', body: '新', type: 'feedback', source: 'agent', scope: 'global', load: 'always', chapter: 2 })
     // 手改文件：去掉编号、多了空格、全角数字前缀——NFKC 与去编号后仍是同一个标题
     ws.write(ws.agentsFile, AGENTS3.replace('## 2. 乙章', '## ２.  乙章 '))
     const acc = await mod.acceptPending(ws.memoryDir, q.id, { globalDir: ws.globalDir })
@@ -333,28 +333,24 @@ section('收尾：agentsFileDisplay 看配置的 agentsFile（真实模型写入
     mkdirSync(path.dirname(agentsFile), { recursive: true })
     h.write(agentsFile, '# 全局\n\n## 1. 已有\n\n内容\n')
     const r = await h.tool('memory_remember', { slug: 'custom-agents', title: '新主题', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
-    check('待确认提示写配置的那个文件（符号形式），不写主目录下的 AGENTS.md', r.text.includes('writes it into $DSH_HOME/custom/AGENTS.md') && !r.text.includes('$DSH_HOME/AGENTS.md'), r.text)
+    check('新按需草稿不再指向自定义 AGENTS.md，该文件原样保留', r.load === 'on-demand' && r.text.endsWith(mod.LOAD_IGNORED_TEXT) && !r.text.includes('writes it into $DSH_HOME/custom/AGENTS.md') && h.read(agentsFile) === '# 全局\n\n## 1. 已有\n\n内容\n', r.text)
   } finally {
     h.cleanup()
     rmSync(path.dirname(agentsFile), { recursive: true, force: true })
   }
 }
 
-section('收尾：要求确认章节时的清单每章只有一个编号，就是该传的 chapter 值')
+section('旧章节参数不再触发 AGENTS.md 章节协议')
 {
-  const h = makeHost(mod, { config: { agentWrites: 'review' } })
+  const h = makeHost(mod, { config: { agentWrites: 'review', duplicateCheck: false } })
   try {
-    // 前两章带编号，第三章手写时没编号——列表里的序号以「第几个 ## 章」为准
-    h.write(h.agentsFile, '# 全局\n\n## 1. 安全\n\n甲\n\n## 2. 临时文件\n\n乙\n\n## 杂项\n\n丙\n')
-    const r = await h.tool('memory_remember', { slug: 'new-topic', title: '一个新主题', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always' })
-    const list = r.text.split('Existing chapters:')[1]?.split('\n\n')[0] ?? ''
-    check('needs-confirmation 的清单里不出现「数字. 数字.」这种重复编号', r.reason === 'needs-confirmation' && list !== '' && !/\d+\.\s*\d+\./.test(list), list)
-    check('  …每行是「N. 标题」，N 从 1 连续', list.trim().split('\n').join('|') === '1. 安全|2. 临时文件|3. 杂项', list)
-    const third = await h.tool('memory_remember', { slug: 'misc-v2', title: '杂项（合并）', body: 'y', type: 'feedback', source: 'agent', scope: 'global', load: 'always', chapter: 3 })
-    check('  …清单里的 3 就是该传的 chapter：chapter: 3 定位到「杂项」', third.pending === true && third.chapter === 3 && /replacing chapter "杂项"/.test(third.text), third.text)
-  } finally {
-    h.cleanup()
-  }
+    const original = '# 全局\n\n## 1. 安全\n\n甲\n\n## 2. 临时文件\n\n乙\n\n## 杂项\n\n丙\n'
+    h.write(h.agentsFile, original)
+    const r = await h.tool('memory_remember', { slug: 'new-topic', title: '一个新主题', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always', chapter: 999 })
+    check('不再要求章节确认，越界章号也不改变按需去向', r.pending === true && r.reason === 'agent-review' && r.load === 'on-demand' && r.loadIgnored === true, JSON.stringify(r))
+    const draft = mod.listPending(h.memoryDir)[0]
+    check('新草稿没有章节字段，AGENTS.md 未变', draft?.meta.chapter === undefined && draft?.meta.chapterTitle === undefined && draft?.meta.newChapter === undefined && h.read(h.agentsFile) === original)
+  } finally { h.cleanup() }
 }
 
 section('其它：HTTP 路由处写明「宿主网页服务无鉴权」；status 拿不到工作目录时也带 evidenceSource')

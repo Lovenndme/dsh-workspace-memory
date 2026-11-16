@@ -54,9 +54,9 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 
 1. `checkRememberArgs` 自行校验入参，非法枚举或缺必填返回 `invalid-argument`，一个字都不写（`scope` 在 `required` 里，但缺失仍取 `project`）。
 2. **先看 `type` 是否属于改道类型**（`ROUTED_TYPES`：`procedure` / `repo-rule` / `docs`）：是就什么都不保存，`routedReply` 返回 `belongs-elsewhere` 与 `home` 及去处说明。例外是「更新留在原处」：同时带 `supersedes` 且能解析到确实存在的记忆（`keptAsMemoryTarget`）时不改道，按被取代那条的类型、`load: on-demand` 走下面的正常写入，返回带 `keptAsMemory: true`。
-3. 定加载方式：`type` 为 `user` / `feedback` 且 `scope: global` 的一律 `always`（`resolveLoad`、`ALWAYS_TYPES`），调用方显式给了 `on-demand` 被覆盖时返回带 `loadForced: true`；「更新留在原处」的写入不受影响。然后 `project + always` 直接拒写（`belongs-in-project-agents`）。
-4. `source: user` 时**总是**核对证据，两道都过才算核实：出处（`verifyEvidenceFrom`：先查 pre-step 缓存，没通过再回落会话快照）与相关（`evidenceRelates`，比对标题、摘要、正文）。结果存进 `evidenceVerified`（草稿与正式记忆都存）。然后 `rememberRoute()` 分流：`always` 不论来源一律进 pending；`user` 且核实的按需写入直写，未核实进 pending；`agent + on-demand` 看 `agentWrites`。
-5. `load: always` 只用 `planAgentsChapter` 校验章节协议（只判断不写）再入队，草稿存章号与章标题；`memory_remember` 不直写 AGENTS.md。带 `supersedes` 时先用 `lookupSuperseded` 解析（解析不到照样拒写），把旧条 id 与 `supersedesScope` 记进草稿；用户收下时先写章节，写成功后 `retireSupersededMemory` 归档删除旧条，丢弃或章节写入失败时旧条不动。
+3. 加载方式只有按需：2026-11-16 起 `memory_remember` 没有 `load` 参数（用户决定对齐 Claude Code：自动记的一律进记忆库，全局 AGENTS.md 只由用户写）。模型仍传了 `load` 时照常按需处理，返回带 `loadIgnored: true` 与 `LOAD_IGNORED_TEXT`——这句会接在任何结果后面（直写、待确认、拒写、改道），所以措辞里不能说「已保存」。
+4. `source: user` 时**总是**核对证据，两道都过才算核实：出处（`verifyEvidenceFrom`：先查 pre-step 缓存，没通过再回落会话快照）与相关（`evidenceRelates`，比对标题、摘要、正文）。结果存进 `evidenceVerified`（草稿与正式记忆都存）。然后 `rememberRoute()` 分流：`user` 且核实的直写，未核实进 pending；`agent` 看 `agentWrites`。
+5. `memory_remember` 与自动抽取都不再生成常驻草稿。旧版本留下的常驻草稿（`load: always`）仍由 `acceptPending` 处理：按章标题定位写章节；带 `supersedes` 时写成功后 `retireSupersededMemory` 归档删除旧条，丢弃或章节写入失败时旧条不动；`project + always` 拒收（`belongs-in-project-agents`）。
 6. 按需写入依次过 `needs-slug`、`supersedes` 解析（本库可用唯一前缀；跨库只认精确 id，跨库时先 `moveMemory` 搬过来）、查重（两个库一起比，复用 `recall` 打分，`recordHits: false`；命中 ≥ `duplicateThreshold` 拒写，除非 `supersedes` 或 `newMemory: true`）、条数上限（两个库分别计数），**之后**才按分流结果直写或入队。入队时同 slug 且同意图的草稿被覆盖（`queuePending`）；直写成功后清掉同 slug 且同意图的旧草稿（`clearDraftsFor`）。
 
 覆盖/删除/换库前都经 `archiveVersion` 留档到 `history/`。写入后的索引重建走 `rebuildIndexQuietly`：失败不抛（记忆已落盘，抛了调用方会重试），但会记下来，返回值带 `indexStale`、`memory_status` 会明说。`moveMemory` 失败分 `move-failed`（已回滚）与 `move-partial`（回滚也失败，两个库各一份），换库后补丁失败是 `partially-saved`。UI 编辑唯一入口是 `validateMemoryPatch`，落盘永远走 `serializeFrontmatter`。
@@ -102,13 +102,13 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 - **跨库操作只认精确 id，前缀匹配只在库内用**：跨库也接受唯一前缀时，往项目库写一条只带短前缀 `supersedes` 的记忆，就能把全局库里不相关的条目搬走删掉。
 - **草稿的覆盖与清理都用意图（`draftIntent`：scope、load、supersedes、章号、newChapter）判断，不要只比 slug**：只比 slug 时，一条「常驻 + 取代 X」的草稿会被同 slug 的普通草稿整个盖掉，或被一次不带 supersedes 的直写清掉，它要做的事就丢了。
 - **章节草稿按章标题定位，不按章号**：章号只供面板显示。按章号定位时，用户删掉前面任意一章、编号整体前移，草稿就永远收不下了。
-- **证据核对是出处核对，不是语义校验**：它只证明「这句话出自用户、与这条记忆沾边」，截取否定句的后半段照样能过。别指望它判断语义，也别用否定词黑名单之类的办法去补（误伤与漏网都多）；防线是常驻一律待确认、面板标「未核实」、提示文案不教模型怎么绕——返回文本别说「怎样才算沾边」，那等于教模型把用户的话抄进标题。
+- **证据核对是出处核对，不是语义校验**：它只证明「这句话出自用户、与这条记忆沾边」，截取否定句的后半段照样能过。别指望它判断语义，也别用否定词黑名单之类的办法去补（误伤与漏网都多）；防线是全局 AGENTS.md 只由用户写、待确认与面板上的「说是你的原话 · 没核对上」标记、提示文案不教模型怎么绕——返回文本别说「怎样才算沾边」，那等于教模型把用户的话抄进标题。
 - **单元测试全绿不代表实现没问题**：实施期间测试一直全绿，两次独立审查仍各发现 11 项、8 项，复审的问题多数出在上一轮的修复里。改动写入路径（分流、证据、草稿、移库、AGENTS.md）后，要另请没看过设计过程的人做带复现脚本的审查；修复以复现脚本为验收标准，并补反例测试（`test/review-fixes.test.mjs`、`test/review2-fixes.test.mjs`）。
 - **归宿判断靠 `type` 上的归类，不靠提示词里的建议**：三版提示词下归宿场景始终不稳，让模型在调用时表态才稳。新增类型取值时分清「会保存的」（`MEMORY_TYPES`，存储、面板、编辑接口、抽取都认）和「只改道的」（`ROUTED_TYPES`，永远不落盘）；把改道类型加进 `MEMORY_TYPES` 会让它们被当成记忆存下来。
 - **改道不能越过更新**：带 `supersedes` 且旧记忆确实存在时按更新处理（`keptAsMemory`），否则模型把一次更新归类成 `repo-rule` 时什么都不存，旧记忆就成了与用户最新说法相反的过期记忆。
 - **提示词里的例子不要与评测场景重合**：否则等于把考题写进提示词，评测分数会虚高。
-- **去处规则以用户的决定为准**：规则以 AGENTS.md 为准（项目记忆库不存规则），跨项目的做事与表达偏好进全局 AGENTS.md 常驻。不要为了省常驻开销把偏好挪回按需库——那是被用户推翻过的设计倾向（HANDOFF 25.11）。
-- **强制常驻与取代旧条是一起的**：`user` / `feedback` + `global` 强制常驻之后，更新一条按需库里的旧偏好就会走常驻分支；常驻草稿若不带取代对象，收下后同一条偏好会有两个出处。改这两处任何一处时都要连着看另一处，并保证「先写章节、写成功再删旧条」的顺序。
+- **去处规则以用户的决定为准**：规则以 AGENTS.md 为准（项目记忆库不存规则）；跨项目的做事与表达偏好进跨项目记忆库（2026-11-16 用户决定对齐 Claude Code，推翻了 11-15 的「偏好进全局 AGENTS.md 常驻」，HANDOFF 第二十九节）。全局 AGENTS.md 只由用户写：面板里逐章编辑、「升为全局指令」，或用户明确要求时 Agent 用文件工具写。不要再给记忆工具或自动抽取加写 AGENTS.md 的路子。
+- **旧常驻草稿收下时「先写章节、写成功再删旧条」的顺序不要改**：队列里可能还有旧版本留下的常驻草稿（带 `supersedes`）；顺序反了，章节写失败时旧偏好就已经没了。
 - **评测里的「提议」要求写入动作作用于归宿**：只提到 AGENTS.md 不算提议；计分放宽这一条，「嘴上说说」就会被算成去对了归宿。
 - **回复里说「记下了」必须以工具调用为准**：工具没被调用时插件什么都看不到、拦不住。目标模型曾在决定先问用户去处时，回复里却说成已记下，用户会以为记了；系统提示段为此写明「没调用 `memory_remember` 并拿到返回前不要说记下了」。评测时把「声称已记但没有成功调用工具」当作一项单独的检查。
 - **代理模型评测（`--export-prompts` / `--import-decisions`）是单步作答**：模型看不到工具返回和仓库内容，自动分数会低估要改文件的归宿场景，下结论前要人工读答案；每个场景只采样一次，单个场景的翻转不算信号，只认同一类场景整体翻转。代理模型的数字也不能套用到目标模型上。

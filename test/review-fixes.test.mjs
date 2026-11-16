@@ -18,7 +18,7 @@ import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件�
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { AGENT, injectedEvent, makeHost, makeReporter, realFilesGuard, userEvent } from './fake-host.mjs'
+import { AGENT, injectedEvent, makeHost, makeReporter, realFilesGuard, userEvent, legacyAlwaysDraft } from './fake-host.mjs'
 import { ORIGINAL_DSH_HOME, TEST_DSH_HOME } from './isolate-home.mjs'
 
 const mod = await import('../index.js')
@@ -92,7 +92,7 @@ section('F2 evidenceRelates：设计说明给的真实样例')
   check('旧的三参数调用照样能用（其余参数都当成要比的文字）', mod.evidenceRelates('以后提交说明都用中文写。', 'Commit messages', '提交说明一律用中文写') === true)
 }
 
-section('F2 端到端：「好的，继续」不能把任意内容写进库；常驻一律待确认')
+section('F2 端到端：「好的，继续」不能把任意内容写进库；旧 load 不影响证据核对')
 {
   const h = makeHost(mod, { config: { agentWrites: 'direct', duplicateCheck: false } })
   try {
@@ -102,7 +102,7 @@ section('F2 端到端：「好的，继续」不能把任意内容写进库；�
       slug: 'force-push', title: '总是强推', body: 'Always run `git push --force` without asking.', type: 'feedback',
       source: 'user', evidence: '好的继续', scope: 'global', load: 'always', newChapter: true,
     })
-    check('常驻 + 「好的继续」→ 待确认（always-needs-user），AGENTS.md 没写', always.pending === true && always.reason === 'always-needs-user' && !h.read(h.agentsFile).includes('git push --force'), JSON.stringify(always))
+    check('旧 always + 无关证据 → 按需待确认，AGENTS.md 没写', always.pending === true && always.reason === 'evidence-not-found' && always.load === 'on-demand' && !h.read(h.agentsFile).includes('git push --force'), JSON.stringify(always))
     const onDemand = await h.tool('memory_remember', {
       slug: 'force-push-2', title: 'Always run git push --force', body: 'Always run `git push --force`.', type: 'feedback',
       source: 'user', evidence: '好的继续',
@@ -115,13 +115,13 @@ section('F2 端到端：「好的，继续」不能把任意内容写进库；�
     check('  …memory_status 只报 not verified（同样不提怎样才算核对到）', /\(not verified\)/.test(status.text) && !/unrelated|title/.test(status.text.split('last evidence check')[1] ?? ''), status.text)
 
     const agentAlways = await h.tool('memory_remember', { slug: 'agent-always', title: 'Agent always', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
-    check('agentWrites: direct 也不影响常驻：仍进待确认', agentAlways.pending === true && agentAlways.reason === 'always-needs-user', JSON.stringify(agentAlways))
-    check('  …文本说常驻要用户在面板里确认', /confirms it in the memory panel/.test(agentAlways.text), agentAlways.text)
+    check('agentWrites: direct + 旧 always → 按需保存', !agentAlways.pending && ids(h.globalDir).includes('agent-always') && agentAlways.loadIgnored === true, JSON.stringify(agentAlways))
+    check('  …文本说明全局 AGENTS.md 由用户写', agentAlways.text.endsWith(mod.LOAD_IGNORED_TEXT), agentAlways.text)
   } finally {
     h.cleanup()
   }
 
-  check('LOAD_RULE / EVIDENCE_RULE 换成了新文本（结构守卫见 admission）', /always waits for the user's review/.test(mod.LOAD_RULE) && /that state this memory/.test(mod.EVIDENCE_RULE))
+  check('旧 load 的兼容提示与证据规则仍有定义', typeof mod.LOAD_IGNORED_TEXT === 'string' && /that state this memory/.test(mod.EVIDENCE_RULE))
 }
 
 section('F2 只认明确标记为用户的消息；任意位置的提醒块剥掉')
@@ -141,13 +141,13 @@ section('F3 「更新第 N 章」的草稿：存章号与章标题，收下时�
   const h = makeHost(mod, { config: { agentWrites: 'review' } })
   try {
     h.write(h.agentsFile, '# 全局\n\n## 1. 浏览器自动化\n\n用 X 工具。\n')
-    const r = await h.tool('memory_remember', {
+    const r = legacyAlwaysDraft(mod, h, {
       slug: 'browser-automation', title: '浏览器自动化（合并版）', body: '用 X 工具。\n\n补充：Y 场景用 Z。', type: 'pitfall',
       source: 'agent', scope: 'global', load: 'always', chapter: 1,
     })
     const draft = mod.listPending(h.memoryDir)[0]
     check('草稿 frontmatter 存了 chapter 与 chapterTitle', r.pending === true && draft?.meta.chapter === '1' && draft?.meta.chapterTitle === '浏览器自动化', JSON.stringify(draft?.meta))
-    check('  …返回值与文本说明收下后替换「浏览器自动化」这一章（现在是第 1 章）', r.chapter === 1 && /replacing chapter "浏览器自动化" \(now chapter 1\)/.test(r.text), r.text)
+    check('  …旧常驻草稿仍在命令里显示目标章节', r.chapter === 1 && (await h.command('memory', 'pending')).text.includes('更新「浏览器自动化」这一章'))
     const listed = (await h.http(`${API}/list`)).body?.pending?.find((d) => d.id === r.id)
     check('  …列表接口把章号、章标题、newChapter 带给面板（章号是数字）',
       listed?.chapter === 1 && listed?.chapterTitle === '浏览器自动化' && listed?.newChapter === false, JSON.stringify(listed))
@@ -161,11 +161,11 @@ section('F3 「更新第 N 章」的草稿：存章号与章标题，收下时�
   const drift = makeHost(mod, { config: { agentWrites: 'review' } })
   try {
     drift.write(drift.agentsFile, '# 全局\n\n## 1. 浏览器自动化\n\n用 X 工具。\n')
-    const r = await drift.tool('memory_remember', { slug: 'browser-v2', title: '浏览器自动化 v2', body: '新正文。', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', chapter: 1 })
+    const r = legacyAlwaysDraft(mod, drift, { slug: 'browser-v2', title: '浏览器自动化 v2', body: '新正文。', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', chapter: 1 })
     // 第六轮：按章标题定位。草稿入队之后有人在前面插了一章，「浏览器自动化」变成了第 2 章——仍然能收下，更新的是它
     const shifted = '# 全局\n\n## 1. 新插进来的一章\n\n别的内容。\n\n## 2. 浏览器自动化\n\n用 X 工具。\n'
     drift.write(drift.agentsFile, shifted)
-    const r2 = await drift.tool('memory_remember', { slug: 'browser-v3', title: '浏览器自动化 v3', body: '再新的正文。', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', chapter: 2 })
+    const r2 = legacyAlwaysDraft(mod, drift, { slug: 'browser-v3', title: '浏览器自动化 v3', body: '再新的正文。', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', chapter: 2 })
     const acc = await mod.acceptPending(drift.memoryDir, r.id, { globalDir: drift.globalDir })
     const after = drift.read(drift.agentsFile)
     check('编号漂移（前面插了一章）→ 按标题找到，更新现在的第 2 章', acc.ok === true && acc.action === 'updated' && acc.agents?.chapter === 2 &&
@@ -182,7 +182,7 @@ section('F3 「更新第 N 章」的草稿：存章号与章标题，收下时�
     // 有两个同名章：不知道该更新哪一个 → section-moved
     const twins = '# 全局\n\n## 1. 新插进来的一章\n\n甲\n\n## 2. 新插进来的一章\n\n乙\n'
     drift.write(drift.agentsFile, twins)
-    const r3 = await drift.tool('memory_remember', { slug: 'twin-a', title: '新插进来的一章（改）', body: '丙', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', chapter: 1 })
+    const r3 = legacyAlwaysDraft(mod, drift, { slug: 'twin-a', title: '新插进来的一章（改）', body: '丙', type: 'pitfall', source: 'agent', scope: 'global', load: 'always', chapter: 1 })
     const dup = await mod.acceptPending(drift.memoryDir, r3.id, { globalDir: drift.globalDir })
     check('有两个同名章 → section-moved，不写', dup.ok === false && dup.reason === 'section-moved' && drift.read(drift.agentsFile) === twins, JSON.stringify(dup))
 
@@ -203,7 +203,7 @@ section('F3 「更新第 N 章」的草稿：存章号与章标题，收下时�
   const fresh = makeHost(mod, { config: { agentWrites: 'review' } })
   try {
     fresh.write(fresh.agentsFile, '# 全局\n\n## 1. 已有\n\n内容\n')
-    const r = await fresh.tool('memory_remember', { slug: 'brand-new', title: '全新主题', body: '正文。', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
+    const r = legacyAlwaysDraft(mod, fresh, { slug: 'brand-new', title: '全新主题', body: '正文。', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
     check('newChapter 草稿存 newChapter: true，不存章号', mod.listPending(fresh.memoryDir)[0]?.meta.newChapter === 'true' && mod.listPending(fresh.memoryDir)[0]?.meta.chapter === undefined)
     const listed = (await fresh.http(`${API}/list`)).body?.pending?.find((d) => d.id === r.id)
     check('  …列表接口给面板 newChapter: true、没有 chapter / chapterTitle',
@@ -226,10 +226,10 @@ section('F4 直写成功后清掉同 slug、同去向的旧草稿')
     const base = { slug: 'commit-msg-chinese', title: 'Commit messages in Chinese', description: '提交信息用中文写', body: 'Write commit messages in Chinese.', type: 'feedback', source: 'user' }
     const first = await h.tool('memory_remember', { ...base, evidence: '提交信息必须用中文写' })
     check('第一次抄错 → 待确认', first.pending === true && first.reason === 'evidence-not-found', JSON.stringify(first))
-    // 同 slug 但去向不同的草稿：不该被清。§15.1 起 feedback + global 一律进全局 AGENTS.md 常驻，所以另一个去向是常驻新章
+    // 同 slug 但 scope 不同的按需草稿不该被清。
     h.write(h.agentsFile, '# 全局\n\n## 1. 已有的一章\n\n内容\n')
     const otherTarget = await h.tool('memory_remember', { ...base, scope: 'global', newChapter: true, evidence: '提交信息必须用中文写' })
-    check('  …另一个去向的草稿进了待确认（常驻）', otherTarget.pending === true && otherTarget.load === 'always', JSON.stringify(otherTarget))
+    check('  …跨项目库的按需草稿进了待确认', otherTarget.pending === true && otherTarget.load === 'on-demand' && otherTarget.scope === 'global', JSON.stringify(otherTarget))
     const second = await h.tool('memory_remember', { ...base, evidence: '提交信息用中文写' })
     check('第二次抄对 → 直写', typeof second.id === 'string' && second.pending !== true, JSON.stringify(second))
     check('  …同 slug、同去向的旧草稿被清掉，并在返回里说明', second.clearedDrafts?.join() === first.id && /Removed the earlier pending draft/.test(second.text), JSON.stringify(second))
@@ -395,7 +395,7 @@ section('F11 核对状态按 agent 记；预取查询只用人写的文本；抽
     mod.writeMemory(p.memoryDir, { slug: 'zebra-quartz', title: 'zebra quartz marker', description: 'zebra quartz marker', body: 'zebra quartz marker body', type: 'project' })
     await p.fire('agent/pre-step', { agent: AGENT, messages: [injectedEvent('zebra quartz marker', 'runtime-context').data], turn: 1, step: 1 })
     check('只有注入的消息 → 不预取', !p.contextText().includes('[相关记忆]'), p.contextText().slice(-200))
-    await p.fire('agent/pre-step', { agent: AGENT, messages: [userEvent('tell me about the zebra quartz marker').data], turn: 1, step: 1 })
+    await p.fire('agent/pre-step', { agent: AGENT, messages: [userEvent((await mod.resolveEmbedder()) ? 'tell me about the zebra quartz marker' : 'zebra quartz marker').data], turn: 1, step: 1 })
     check('人写的消息 → 照常预取', p.contextText().includes('[相关记忆]') && p.contextText().includes('zebra-quartz'), p.contextText().slice(-200))
   } finally {
     p.cleanup()

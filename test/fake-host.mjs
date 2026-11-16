@@ -35,6 +35,21 @@ export const injectedEvent = (text, kind = 'runtime-context') => ({
   data: { id: `m${(eventCounter += 1)}`, role: 'user', content: [{ type: 'text', text }], source: { kind } },
 })
 
+/** 构造升级前遗留的常驻草稿；新 memory_remember 不再产生这种草稿。 */
+export function legacyAlwaysDraft(mod, host, args) {
+  const plan = mod.planAgentsChapter(args)
+  if (!plan.ok) throw new Error(`旧草稿测试的章节不存在：${plan.reason}`)
+  const file = mod.writePending(host.memoryDir, {
+    ...args,
+    scope: 'global',
+    load: 'always',
+    ...(plan.action === 'updated'
+      ? { chapter: plan.chapter, chapterTitle: plan.chapterTitle, newChapter: false }
+      : { newChapter: true }),
+  })
+  return { file, id: path.basename(file, '.md'), pending: true, ...(plan.action === 'updated' ? { chapter: plan.chapter } : {}) }
+}
+
 /**
  * 真实文件保护：记下真实主目录下 `AGENTS.md`、全局按需库（默认 `dsh-workspace-memory/global`，
  * 以及旧默认位置 `global-memory`）的**存在性与哈希**，测试结束时比对。

@@ -1,22 +1,12 @@
 /**
- * memory_remember 的去向（scope × load）与来源分流，走完整的工具调用。
- *
- * | scope   | load      | 去向 |
- * |---------|-----------|------|
- * | project | on-demand | 项目库 |
- * | global  | on-demand | 全局按需库（新增）；type 是 user / feedback 时按 §15.1 改成 always（见末尾一节） |
- * | global  | always    | ~/.dsh/AGENTS.md 的一章：一律先进待确认，收下才写（第五轮） |
- * | project | always    | 插件不写：belongs-in-project-agents，指向项目自己的 AGENTS.md |
- *
- * 来源（按需写入）：user + 证据核对通过且与标题/摘要沾边 → 直写；否则 evidence-not-found；
- * agent → agentWrites（默认 review → agent-review）。常驻（always）不论来源一律 always-needs-user。
- *
- * 全部在临时目录；AGENTS.md / 两个库都经 apply 传入，结束时比对真实文件的哈希。
+ * 新写入按 scope 选记忆库，按来源决定直写或待确认，旧 load 实参只产生兼容提示。
+ * 历史常驻草稿直接构造，保留收下写 AGENTS.md、取代旧条与失败时不删旧条的覆盖。
+ * AGENTS.md / 两个库都经 apply 传入临时路径。
  */
 import './isolate-home.mjs' // 第一个 import：把 DSH_HOME 指到本文件独占的临时目录（第五轮测试隔离）
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { makeHost, makeReporter, realFilesGuard, userEvent } from './fake-host.mjs'
+import { makeHost, makeReporter, realFilesGuard, userEvent, legacyAlwaysDraft, schemaProblems } from './fake-host.mjs'
 
 const mod = await import('../index.js')
 const { check, section, summary } = makeReporter()
@@ -40,81 +30,21 @@ function host(config = {}) {
   return h
 }
 
-const snapshot = (h) => JSON.stringify([mdFiles(h.memoryDir), mdFiles(h.globalDir), h.read(h.agentsFile), mod.listPending(h.memoryDir).map((d) => d.id)])
-
-section('四种 scope × load 组合（user 原话、证据通过：按需直写，常驻进待确认）')
+section('scope 决定记忆库，旧 load: always 不改变去向')
 {
-  // 证据要与标题或摘要沾边（evidenceRelates，第五轮）：摘要写的就是这条记忆本身
-  const base = { type: 'feedback', source: 'user', evidence: '改完插件都先跑测试…别再忘了', description: '改完插件先跑测试再提交' }
-
-  const a = host()
-  try {
-    const res = await a.tool('memory_remember', { ...base, slug: 'test-first', title: 'Test first', body: '先跑测试再提交。', scope: 'project', load: 'on-demand' })
-    check('project + on-demand → 项目库', res.scope === 'project' && mdFiles(a.memoryDir).join() === 'test-first.md' && mdFiles(a.globalDir).length === 0, JSON.stringify(res))
-    const meta = mod.listMemories(a.memoryDir)[0].meta
-    check('  …frontmatter 带 source / evidence，不再写 confidence', meta.source === 'user' && /先跑测试/.test(meta.evidence) && meta.confidence === undefined, JSON.stringify(meta))
-  } finally {
-    a.cleanup()
-  }
-
-  const b = host()
-  try {
-    // §15.1 起 feedback / user + global 一律常驻：这里测全局按需库这条去向，用不被强制的类型
-    const res = await b.tool('memory_remember', { ...base, type: 'project', slug: 'test-first', title: 'Test first', body: '先跑测试再提交。', scope: 'global', load: 'on-demand' })
-    check('global + on-demand → 全局按需库', res.scope === 'global' && mdFiles(b.globalDir).join() === 'test-first.md' && mdFiles(b.memoryDir).length === 0, JSON.stringify(res))
-    check('  …全局库有自己的 MEMORY.md 索引', /\(test-first\.md\)/.test(b.read(path.join(b.globalDir, 'MEMORY.md'))))
-    check('  …文件里记着 scope: global', mod.listMemories(b.globalDir)[0].meta.scope === 'global')
-    check('  …AGENTS.md 没动', b.read(b.agentsFile) === AGENTS)
-  } finally {
-    b.cleanup()
-  }
-
-  const c = host()
-  try {
-    const res = await c.tool('memory_remember', { ...base, title: '先跑测试再提交', body: '先跑测试再提交。', scope: 'global', load: 'always', newChapter: true })
-    // 第五轮设计变更：常驻一律进待确认，证据核对得上也一样
-    check('global + always → 进待确认（always-needs-user），AGENTS.md 没动', res.pending === true && res.reason === 'always-needs-user' && c.read(c.agentsFile) === AGENTS, JSON.stringify(res))
-    check('  …两个记忆库都没写', mdFiles(c.memoryDir).length === 0 && mdFiles(c.globalDir).length === 0)
-    check('  …文本说在面板里等确认，不说「已生效」', /waiting in the memory panel/.test(res.text) && !res.text.includes(mod.ACTIVE_NOW_TEXT), res.text)
-    const accepted = await mod.acceptPending(c.memoryDir, res.id)
-    check('  …收下后 AGENTS.md 新增一章', accepted.ok === true && accepted.action === 'added' && c.read(c.agentsFile).includes('## 2. 先跑测试再提交'), JSON.stringify(accepted))
-  } finally {
-    c.cleanup()
-  }
-
-  const d = host()
-  try {
-    // 宿主只从「往上最近的 .git 目录」往下加载项目指令（官方 dsh-agent-instructions：findProjectRoot）。
-    // 在工作区里放一个 .git，让「项目根」是确定的，不依赖临时目录的上级里有没有 .git。
-    mkdirSync(path.join(d.workspace, '.git'))
-    const projectAgents = path.join(d.workspace, 'AGENTS.md')
-    const before = snapshot(d)
-    const res = await d.tool('memory_remember', { ...base, slug: 'test-first', title: 'Test first', body: '先跑测试再提交。', scope: 'project', load: 'always' })
-    check('project + always → belongs-in-project-agents、written:false', res.reason === 'belongs-in-project-agents' && res.written === false, JSON.stringify(res))
-    check('  …文本给出项目根（含 .git 的目录）下 AGENTS.md 的绝对路径', res.text.includes(projectAgents), res.text)
-    check('  …并说明它当前不存在', /does not exist yet/.test(res.text))
-    check('  …说明共享文件要先征得同意、个人偏好改 scope 或 load', /once they agree/.test(res.text) && /scope: "global"/.test(res.text) && /load: "on-demand"/.test(res.text))
-    check('  …只对当前用户成立的项目规则写同目录的 AGENTS.local.md', /AGENTS\.local\.md in the same directory/.test(res.text), res.text)
-    check('  …什么都没写（两个库、草稿、全局 AGENTS.md、项目 AGENTS.md）', snapshot(d) === before && !existsSync(projectAgents))
-
-    // 会话在子目录里：往上找到最近的 .git，而不是停在工作目录
-    const deep = path.join(d.workspace, 'pkg', 'src')
-    mkdirSync(deep, { recursive: true })
-    d.state.cwd = deep
-    const fromDeep = await d.tool('memory_remember', { ...base, slug: 'test-first', title: 'Test first', body: '先跑测试再提交。', scope: 'project', load: 'always' })
-    check('  …工作目录在子目录：仍指向含 .git 的根下的 AGENTS.md', fromDeep.text.includes(projectAgents) && !fromDeep.text.includes(path.join(deep, 'AGENTS.md')), fromDeep.text)
-    // 子目录自己是一个 git 仓库（工作区里的子仓库）：指向它自己的 AGENTS.md
-    mkdirSync(path.join(d.workspace, 'pkg', '.git'))
-    const fromSubRepo = await d.tool('memory_remember', { ...base, slug: 'test-first', title: 'Test first', body: '先跑测试再提交。', scope: 'project', load: 'always' })
-    check('  …最近的 .git 在子仓库：指向子仓库的 AGENTS.md', fromSubRepo.text.includes(path.join(d.workspace, 'pkg', 'AGENTS.md')), fromSubRepo.text)
-    d.state.cwd = d.workspace
-    d.write(projectAgents, '# 项目规则\n')
-    const again = await d.tool('memory_remember', { ...base, slug: 'test-first', title: 'Test first', body: '先跑测试再提交。', scope: 'project', load: 'always' })
-    check('  …项目 AGENTS.md 存在时如实说存在，且不改它', /it exists/.test(again.text) && d.read(projectAgents) === '# 项目规则\n', again.text)
-    const agent = await d.tool('memory_remember', { slug: 'x', title: 'X', body: 'x', type: 'project', source: 'agent', scope: 'project', load: 'always' })
-    check('  …不论来源都同样拒绝（不进待确认）', agent.reason === 'belongs-in-project-agents' && mod.listPending(d.memoryDir).length === 0)
-  } finally {
-    d.cleanup()
+  for (const scope of ['project', 'global']) {
+    const h = host()
+    try {
+      const result = await h.tool('memory_remember', {
+        slug: 'test-first', title: 'Test first', body: '先跑测试再提交。', description: '改完插件先跑测试再提交',
+        type: 'feedback', source: 'user', evidence: '改完插件都先跑测试…别再忘了', scope, load: 'always', newChapter: true,
+      })
+      const dir = scope === 'global' ? h.globalDir : h.memoryDir
+      check(scope + ' + always → 证据通过直写记忆库', !result.pending && result.scope === scope && mdFiles(dir).join() === 'test-first.md', JSON.stringify(result))
+      check('旧 load 返回兼容提示，放在全文最后', result.loadIgnored === true && result.text.endsWith(mod.LOAD_IGNORED_TEXT), result.text)
+      check('正式记忆带来源和证据', mod.listMemories(dir)[0]?.meta.source === 'user' && mod.listMemories(dir)[0]?.meta.evidenceVerified === 'true')
+      check('没有草稿，AGENTS.md 原样不变', mod.listPending(h.memoryDir).length === 0 && h.read(h.agentsFile) === AGENTS)
+    } finally { h.cleanup() }
   }
 }
 
@@ -161,7 +91,20 @@ section('source: user —— 证据通过直写，未通过进待确认')
   }
 }
 
-section('source: agent —— 默认进待确认；agentWrites: direct 时按需直写，常驻仍要人看')
+section('全局 AGENTS.md 不存在时，新记忆仍可入队和收下')
+{
+  const h = makeHost(mod, { config: { agentWrites: 'review', duplicateCheck: false } })
+  try {
+    const result = await h.tool('memory_remember', { slug: 'without-agents', title: 'Without agents', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always' })
+    check('缺指令文件不影响按需入队', result.pending === true && result.load === 'on-demand' && result.loadIgnored === true && !existsSync(h.agentsFile), JSON.stringify(result))
+    const accepted = await mod.acceptPending(h.memoryDir, result.id)
+    check('收下只写跨项目库，不创建 AGENTS.md', accepted.ok && mdFiles(h.globalDir).includes('without-agents.md') && !existsSync(h.agentsFile), JSON.stringify(accepted))
+  } finally {
+    h.cleanup()
+  }
+}
+
+section('source: agent —— 默认进待确认；agentWrites: direct 时写记忆库')
 {
   const review = host()
   try {
@@ -182,110 +125,98 @@ section('source: agent —— 默认进待确认；agentWrites: direct 时按需
     const res = await direct.tool('memory_remember', { slug: 'pit', title: 'Pit', body: 'rename EPERM。', type: 'pitfall', source: 'agent', scope: 'global' })
     check('agentWrites: direct → agent + on-demand 直写（全局按需库）', typeof res.id === 'string' && res.scope === 'global' && mdFiles(direct.globalDir).join() === 'pit.md', JSON.stringify(res))
     check('  …frontmatter 记着 source: agent', mod.listMemories(direct.globalDir)[0].meta.source === 'agent')
-    const always = await direct.tool('memory_remember', { title: '模型的全局常驻规则', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
-    check('agent + always 仍进待确认（always-needs-user）', always.pending === true && always.reason === 'always-needs-user' && direct.read(direct.agentsFile) === AGENTS, JSON.stringify(always))
-    // 这里的 agentsFile 配置在临时目录（DSH 主目录之外）：文案显示的就是配置的那个路径，
-    // 不是主目录下的 AGENTS.md（以前恒写主目录，配置了自定义路径的用户看到的是一个不存在的文件）
-    check('  …文本点明收下后写进配置的那个 AGENTS.md', always.text.includes(`writes it into ${direct.agentsFile}`) && always.text.includes(mod.agentsFileDisplay()), always.text)
+    const always = await direct.tool('memory_remember', { slug: 'agent-always', title: '模型的全局常驻规则', body: 'x', type: 'feedback', source: 'agent', scope: 'global', load: 'always', newChapter: true })
+    check('agentWrites: direct + 旧 always → 全局记忆库，不写 AGENTS.md', !always.pending && always.scope === 'global' && always.loadIgnored === true && mdFiles(direct.globalDir).includes(always.id + '.md') && direct.read(direct.agentsFile) === AGENTS, JSON.stringify(always))
+    check('兼容提示说明 AGENTS.md 由用户写', always.text.endsWith(mod.LOAD_IGNORED_TEXT), always.text)
   } finally {
     direct.cleanup()
   }
 }
 
-section('§15.1 user / feedback + global 一律常驻（代码判定，不交给模型选）')
+section('user / feedback + global 按来源写跨项目库，不再强制常驻')
 {
-  // 目标模型评测：模型说「已记到全局偏好」，scope 给了 global，load 却留在 on-demand，条目进了按需库
-  const base = { source: 'user', evidence: '改完插件都先跑测试…别再忘了', description: '改完插件先跑测试再提交', title: '先跑测试再提交', body: '先跑测试再提交。' }
-
-  for (const type of ['feedback', 'user']) {
-    const h = host({ agentWrites: 'direct' })
+  for (const type of ['user', 'feedback']) {
+    const h = host()
     try {
-      const res = await h.tool('memory_remember', { ...base, slug: `forced-${type}`, type, scope: 'global', load: 'on-demand', newChapter: true })
-      check(`${type} + global + on-demand → 进待确认（常驻），loadForced: true`, res.pending === true && res.reason === 'always-needs-user' && res.load === 'always' && res.loadForced === true, JSON.stringify(res))
-      check('  …文本带那一句说明', res.text.includes(mod.LOAD_FORCED_TEXT), res.text)
-      check('  …两个按需库都没写，AGENTS.md 没动（等用户收下）', mdFiles(h.memoryDir).length === 0 && mdFiles(h.globalDir).length === 0 && h.read(h.agentsFile) === AGENTS)
-      check('  …草稿记着 load: always', mod.listPending(h.memoryDir)[0]?.meta.load === 'always', JSON.stringify(mod.listPending(h.memoryDir)[0]?.meta))
-    } finally {
-      h.cleanup()
-    }
+      const base = { title: '回答先给结论', body: '回答先给结论，再给理由。', type, scope: 'global' }
+      h.state.events.push(userEvent('以后回答先给结论，再给理由。'))
+      const saved = await h.tool('memory_remember', { ...base, slug: type + '-saved', source: 'user', evidence: '以后回答先给结论，再给理由。' })
+      check(type + ' + global + 核实原话 → 直写跨项目库', !saved.pending && saved.scope === 'global' && mdFiles(h.globalDir).includes(saved.id + '.md'), JSON.stringify(saved))
+      check('没传 load 不返回 loadIgnored，也不加兼容提示', !('loadIgnored' in saved) && !saved.text.includes(mod.LOAD_IGNORED_TEXT))
+      const agent = await h.tool('memory_remember', { ...base, slug: type + '-agent', source: 'agent' })
+      check(type + ' + global + agent → 按需草稿', agent.pending === true && agent.reason === 'agent-review' && agent.load === 'on-demand', JSON.stringify(agent))
+      const unknown = await h.tool('memory_remember', { ...base, slug: type + '-unknown', source: 'user', evidence: '用户没说过的话' })
+      check(type + ' + global + 未核实原话 → 按需草稿', unknown.reason === 'evidence-not-found' && unknown.load === 'on-demand', JSON.stringify(unknown))
+      check('所有新草稿都是 on-demand，收下后仍不写 AGENTS.md', mod.listPending(h.memoryDir).every(d => d.meta.load === 'on-demand'))
+      await mod.acceptPending(h.memoryDir, agent.id)
+      check('收下写跨项目库，AGENTS.md 没动', mdFiles(h.globalDir).includes(type + '-agent.md') && h.read(h.agentsFile) === AGENTS)
+    } finally { h.cleanup() }
   }
+}
 
+section('任意非空旧 load 都忽略；空值不产生提示，返回值符合 schema')
+{
   const h = host({ agentWrites: 'direct' })
   try {
-    const noLoad = await h.tool('memory_remember', { ...base, slug: 'no-load', type: 'feedback', scope: 'global', newChapter: true })
-    check('不传 load → 同样常驻，但不带 loadForced（没有覆盖模型的选择）', noLoad.pending === true && noLoad.load === 'always' && !('loadForced' in noLoad) && !noLoad.text.includes(mod.LOAD_FORCED_TEXT), JSON.stringify(noLoad))
-    const explicit = await h.tool('memory_remember', { ...base, slug: 'explicit-always', title: '另一个话题', type: 'feedback', scope: 'global', load: 'always', newChapter: true })
-    check('显式 always → 常驻，不带 loadForced', explicit.pending === true && explicit.load === 'always' && !('loadForced' in explicit), JSON.stringify(explicit))
-    // 常驻分支本身不变：没给 newChapter / chapter、标题又不同名 → needs-confirmation，照样带 loadForced
-    const confirm = await h.tool('memory_remember', { ...base, slug: 'needs-confirm', title: '全新的话题', type: 'feedback', scope: 'global', load: 'on-demand' })
-    check('  …常驻分支的拒写（needs-confirmation）也带 loadForced 与说明', confirm.reason === 'needs-confirmation' && confirm.loadForced === true && confirm.text.includes(mod.LOAD_FORCED_TEXT), JSON.stringify(confirm))
-    // 过期值提示仍固定在全文最后（§4.6），说明那句在它之前
-    const stale = await h.tool('memory_remember', { ...base, slug: 'stale-forced', title: '又一个话题', body: '部署固定在 abc1234 这个提交。', type: 'feedback', scope: 'global', load: 'on-demand', newChapter: true })
-    check('  …有过期值时，说明在过期值提示之前', stale.loadForced === true && Array.isArray(stale.staleValues) && stale.text.indexOf(mod.LOAD_FORCED_TEXT) < stale.text.lastIndexOf('abc1234'), stale.text)
-
-    const project = await h.tool('memory_remember', { ...base, slug: 'project-feedback', type: 'feedback', scope: 'project', load: 'on-demand' })
-    check('feedback + project + on-demand → 照旧进项目按需库', typeof project.id === 'string' && project.scope === 'project' && !project.pending && !('loadForced' in project) && mdFiles(h.memoryDir).includes('project-feedback.md'), JSON.stringify(project))
-    for (const type of ['pitfall', 'reference']) {
-      const res = await h.tool('memory_remember', { slug: `global-${type}`, title: `Global ${type}`, body: `${type} body`, type, source: 'agent', scope: 'global', load: 'on-demand' })
-      check(`${type} + global + on-demand → 照旧进全局按需库（不被强制）`, typeof res.id === 'string' && res.scope === 'global' && !res.pending && !('loadForced' in res) && mdFiles(h.globalDir).includes(`global-${type}.md`), JSON.stringify(res))
+    check('输入 schema 没有 load；输出 schema 的 loadIgnored 是布尔', !('load' in h.tools.get('memory_remember').parameters.properties) && h.tools.get('memory_remember').output.schema.properties.loadIgnored?.type === 'boolean')
+    for (const [i, load] of ['always', 'on-demand', 'sometimes', 42, false, {}, [], NaN, Infinity, undefined, null, '', '  '].entries()) {
+      const ignored = i < 9
+      const result = await h.tool('memory_remember', { slug: 'compat-' + i, title: 'Compatibility ' + i, body: '固定在 abc1234 这个提交。', type: 'feedback', source: 'agent', scope: 'global', load, chapter: 999, newChapter: true })
+      check('旧 load #' + i + ' 正常保存，不受章节参数影响', !result.pending && mdFiles(h.globalDir).includes(result.id + '.md'), JSON.stringify(result))
+      check('兼容标志与非空值一致 #' + i, ignored ? result.loadIgnored === true && result.text.endsWith(mod.LOAD_IGNORED_TEXT) : !('loadIgnored' in result) && !result.text.includes(mod.LOAD_IGNORED_TEXT), result.text)
+      check('lossless JSON 与 output schema #' + i, schemaProblems(h.tools.get('memory_remember').output.schema, result, { strict: true }).length === 0)
     }
+    const review = host()
+    try {
+      const result = await review.tool('memory_remember', { slug: 'compat-review', title: 'Review', body: 'x', type: 'feedback', source: 'agent', scope: 'project', load: 'always' })
+      check('旧 always + agent 默认按需入队且有提示', result.pending === true && result.load === 'on-demand' && result.reason === 'agent-review' && result.loadIgnored === true && result.text.endsWith(mod.LOAD_IGNORED_TEXT), JSON.stringify(result))
+      check('草稿不带章节字段', mod.listPending(review.memoryDir).every(d => d.meta.load === 'on-demand' && d.meta.chapter === undefined && d.meta.newChapter === undefined))
+      await mod.acceptPending(review.memoryDir, result.id)
+      check('项目草稿收下仍只写项目库', mdFiles(review.memoryDir).includes('compat-review.md') && review.read(review.agentsFile) === AGENTS)
+    } finally { review.cleanup() }
+  } finally { h.cleanup() }
+}
 
-    // 「更新留在原处」（keptAsMemory）：被取代的记忆在全局按需库里，更新仍按按需处理
-    mod.writeMemory(h.globalDir, { slug: 'old-global-pref', title: '旧的全局偏好', description: '旧的全局偏好', body: '旧正文。', type: 'feedback', scope: 'global' })
-    const kept = await h.tool('memory_remember', { slug: 'old-global-pref', title: '新的全局偏好', body: '新正文。', type: 'repo-rule', source: 'agent', scope: 'global', load: 'on-demand', supersedes: 'old-global-pref' })
-    check('keptAsMemory 路径不被强制：原地更新在全局按需库里，没有 loadForced', kept.keptAsMemory === true && kept.updated === true && !kept.pending && !('loadForced' in kept) &&
-      mod.listMemories(h.globalDir).find((m) => m.id === 'old-global-pref')?.body === '新正文。', JSON.stringify(kept))
-  } finally {
-    h.cleanup()
-  }
-
-  check('resolveLoad：只有 user / feedback + global 被改成 always；forced 只在显式 on-demand 时为真',
-    JSON.stringify(mod.resolveLoad({ type: 'feedback', scope: 'global', load: 'on-demand' })) === '{"load":"always","forced":true}' &&
-      JSON.stringify(mod.resolveLoad({ type: 'user', scope: 'global', load: '' })) === '{"load":"always","forced":false}' &&
-      JSON.stringify(mod.resolveLoad({ type: 'feedback', scope: 'project', load: 'on-demand' })) === '{"load":"on-demand","forced":false}' &&
-      JSON.stringify(mod.resolveLoad({ type: 'pitfall', scope: 'global', load: 'on-demand' })) === '{"load":"on-demand","forced":false}' &&
-      JSON.stringify(mod.resolveLoad({ type: 'reference', scope: 'global' })) === '{"load":"on-demand","forced":false}')
-
-  // 自动抽取的候选同一规则：user / feedback + global 按常驻进待确认
-  // 每轮最多入队 3 条是默认值，这里有 4 条候选；内容彼此无关，免得被抽取的去重合并
+section('自动抽取忽略候选里的 load，全部生成按需草稿')
+{
   const ex = host({ extractMaxPerTurn: 5 })
   try {
     const candidates = [
-      { slug: 'ex-feedback', title: '回答先给结论', body: '回答时先给结论，再给理由。', type: 'feedback', scope: 'global', load: 'on-demand', source: 'agent' },
-      { slug: 'ex-user', title: '用户是后端工程师', body: '用户主要写 Java 后端，前端经验少。', type: 'user', scope: 'global', source: 'agent' },
-      { slug: 'ex-pitfall', title: 'Windows 上 rename 偶发 EPERM', body: '杀毒软件占着文件时 rename 会报 EPERM，稍等重试即可。', type: 'pitfall', scope: 'global', load: 'on-demand', source: 'agent' },
-      { slug: 'ex-project-feedback', title: '本项目提交说明用中文', body: '这个仓库的提交说明用中文写。', type: 'feedback', scope: 'project', load: 'on-demand', source: 'agent' },
+      { slug: 'ex-feedback', title: '回答先给结论', body: '回答时先给结论，再给理由。', type: 'feedback', scope: 'global', load: 'always', source: 'agent' },
+      { slug: 'ex-user', title: '用户是后端工程师', body: '用户主要写 Java 后端，前端经验少。', type: 'user', scope: 'global', load: 'always', source: 'user', evidence: '用户主要写 Java 后端，前端经验少。' },
+      { slug: 'ex-pitfall', title: 'Windows rename EPERM', body: '杀毒软件占着文件时 rename 会报 EPERM，稍等重试。', type: 'pitfall', scope: 'global', load: 'invalid', source: 'agent' },
+      { slug: 'ex-project', title: '项目截止日期', body: '交付日期是十一月底。', type: 'project', scope: 'project', load: 'always', source: 'agent' },
     ]
-    const session = { snapshotEvents: () => [userEvent('随便说点什么'.repeat(40))], requestContext: () => ({ provider: 'p', model: 'm' }) }
+    const session = { snapshotEvents: () => [userEvent('用户主要写 Java 后端，前端经验少。' + '随便说点什么'.repeat(40))], requestContext: () => ({ provider: 'p', model: 'm' }) }
     const llm = { stream: () => (async function* () { yield { type: 'text-delta', text: JSON.stringify(candidates) } })() }
-    const ctx = { get: (key) => (key === 'llm' ? llm : undefined), sessions: { get: () => session } }
-    const r = await mod.extractFromTurn(ctx, { id: 'x' }, ex.memoryDir, { manual: true, globalDir: ex.globalDir })
-    const loads = Object.fromEntries(mod.listPending(ex.memoryDir).map((d) => [d.meta.slug, d.meta.load]))
-    check('抽取：feedback / user + global 的候选按常驻进待确认，其余照旧', r.queued === 4 && loads['ex-feedback'] === 'always' && loads['ex-user'] === 'always' &&
-      loads['ex-pitfall'] === 'on-demand' && loads['ex-project-feedback'] === 'on-demand', `${JSON.stringify(r)} ${JSON.stringify(loads)}`)
-  } finally {
-    ex.cleanup()
-  }
+    const ctx = { get: key => key === 'llm' ? llm : undefined, sessions: { get: () => session } }
+    const result = await mod.extractFromTurn(ctx, { id: 'x' }, ex.memoryDir, { manual: true, globalDir: ex.globalDir })
+    const drafts = mod.listPending(ex.memoryDir)
+    check('四条候选全部按需入队，两个库和 AGENTS.md 未变', result.queued === 4 && drafts.length === 4 && drafts.every(d => d.meta.load === 'on-demand') && mdFiles(ex.memoryDir).length === 0 && mdFiles(ex.globalDir).length === 0 && ex.read(ex.agentsFile) === AGENTS, JSON.stringify(result))
+    check('抽取核实的全局用户原话也只是按需草稿', drafts.some(d => d.meta.slug === 'ex-user' && d.meta.evidenceVerified === 'true' && d.meta.load === 'on-demand'))
+    for (const draft of drafts) {
+      const accepted = await mod.acceptPending(ex.memoryDir, draft.id)
+      check('收下抽取草稿 ' + draft.meta.slug + ' → 记忆库', accepted.ok && ex.read(ex.agentsFile) === AGENTS, JSON.stringify(accepted))
+    }
+    check('抽取提示不再声明 load', !mod.EXTRACTION_SYSTEM.includes('"load":') && !mod.EXTRACTION_SYSTEM.includes('load: '))
+  } finally { ex.cleanup() }
 }
 
 section('常驻草稿取代按需库里的旧条：收下时先写章节、写成功后归档删除旧条（第十一轮）')
 {
-  // 第十轮复现：强制常驻 + supersedes，收下后旧条仍在全局按需库——同一条偏好两个出处。
-  // 用户的决定：跨项目偏好以全局 AGENTS.md 为唯一出处
+  // 升级前遗留的常驻草稿仍须支持取代旧条；新调用不会再生成这种草稿。
   const API = '/api/dsh-workspace-memory'
   const oldPref = (h, dir = h.globalDir, scope = 'global') =>
     mod.writeMemory(dir, { slug: 'old-pref', title: '旧的回答偏好', description: '回答先讲背景', body: '回答先讲背景。', type: 'feedback', scope })
   const call = (h, extra = {}) =>
-    h.tool('memory_remember', { slug: 'answer-first', title: '回答先给结论', body: '回答先给结论，再给理由。', type: 'feedback', source: 'agent', scope: 'global', load: 'on-demand', supersedes: 'old-pref', newChapter: true, ...extra })
+    legacyAlwaysDraft(mod, h, { slug: 'answer-first', title: '回答先给结论', body: '回答先给结论，再给理由。', type: 'feedback', source: 'agent', scope: 'global', load: 'always', supersedes: 'old-pref', supersedesScope: 'global', newChapter: true, ...extra })
   const inGlobal = (h) => mod.listMemories(h.globalDir).map((m) => m.id)
 
   const h = host()
   try {
     oldPref(h)
     const res = await call(h)
-    check('强制常驻 + 取代全局按需库里的旧条 → 进待确认', res.pending === true && res.load === 'always' && res.loadForced === true, JSON.stringify(res))
-    check('  …文本说明收下后写进全局 AGENTS.md 并删除旧记忆（先归档）',
-      res.text.includes(`Accepting it writes it into ${mod.agentsFileDisplay()} as a new chapter and then deletes the old memory old-pref from the all-projects on-demand library (scope "global") (its body is archived in history/ first).`), res.text)
+    check('历史常驻草稿保留在待确认', res.pending === true && mod.listPending(h.memoryDir)[0]?.meta.load === 'always', JSON.stringify(res))
     const draft = mod.listPending(h.memoryDir)[0]
     check('  …草稿记着被取代条目的 id 与所在的库', draft?.meta.supersedes === 'old-pref' && draft?.meta.supersedesScope === 'global', JSON.stringify(draft?.meta))
     check('  …现在什么都没动（旧条还在，AGENTS.md 没变）', inGlobal(h).join() === 'old-pref' && h.read(h.agentsFile) === AGENTS)
@@ -339,20 +270,19 @@ section('常驻草稿取代按需库里的旧条：收下时先写章节、写�
   const cross = host()
   try {
     oldPref(cross, cross.memoryDir, 'project') // 旧条在项目库：另一个库只认精确 id
-    const res = await call(cross)
-    check('旧条在项目库（精确 id）→ 草稿记着 supersedesScope: project，文本点明项目库', res.pending === true && mod.listPending(cross.memoryDir)[0]?.meta.supersedesScope === 'project' &&
-      /deletes the old memory old-pref from this workspace's library/.test(res.text), res.text)
+    const res = await call(cross, { supersedesScope: 'project' })
+    check('旧条在项目库 → 历史草稿保留 supersedesScope: project', res.pending === true && mod.listPending(cross.memoryDir)[0]?.meta.supersedesScope === 'project')
     const accepted = await mod.acceptPending(cross.memoryDir, res.id, { globalDir: cross.globalDir })
     check('  …收下后从项目库删掉', accepted.ok === true && accepted.replacedScope === 'project' && mod.listMemories(cross.memoryDir).length === 0, JSON.stringify(accepted))
 
-    const notFound = await call(cross, { slug: 'nf', supersedes: 'nothing-like-this' })
+    const notFound = await cross.tool('memory_remember', { title: 'Replace', body: 'x', type: 'feedback', source: 'agent', scope: 'global', slug: 'nf', supersedes: 'nothing-like-this' })
     check('解析不到 → supersedes-not-found，不入队（不静默忽略）', notFound.reason === 'supersedes-not-found' && mod.listPending(cross.memoryDir).length === 0, JSON.stringify(notFound))
     mod.writeMemory(cross.globalDir, { slug: 'pref-a', title: 'A', body: 'a', type: 'feedback', scope: 'global' })
     mod.writeMemory(cross.globalDir, { slug: 'pref-b', title: 'B', body: 'b', type: 'feedback', scope: 'global' })
-    const ambiguous = await call(cross, { slug: 'amb', supersedes: 'pref-' })
+    const ambiguous = await cross.tool('memory_remember', { title: 'Replace', body: 'x', type: 'feedback', source: 'agent', scope: 'global', slug: 'amb', supersedes: 'pref-' })
     check('目标库前缀多条 → supersedes-ambiguous，不入队', ambiguous.reason === 'supersedes-ambiguous' && ambiguous.candidates?.length === 2 && mod.listPending(cross.memoryDir).length === 0, JSON.stringify(ambiguous))
     mod.writeMemory(cross.memoryDir, { slug: 'proj-only-pref', title: 'P', body: 'p', type: 'feedback' })
-    const prefixOther = await call(cross, { slug: 'po', supersedes: 'proj-only' })
+    const prefixOther = await cross.tool('memory_remember', { title: 'Replace', body: 'x', type: 'feedback', source: 'agent', scope: 'global', slug: 'po', supersedes: 'proj-only' })
     check('只在另一个库前缀命中 → supersedes-ambiguous（跨库只认精确 id）', prefixOther.reason === 'supersedes-ambiguous' && prefixOther.candidates?.[0]?.scope === 'project', JSON.stringify(prefixOther))
   } finally {
     cross.cleanup()
@@ -362,10 +292,10 @@ section('常驻草稿取代按需库里的旧条：收下时先写章节、写�
   try {
     oldPref(intents)
     const withOld = await call(intents)
-    const without = await call(intents, { supersedes: undefined })
+    const without = await intents.tool('memory_remember', { slug: 'answer-first', title: '回答先给结论', body: '回答先给结论。', type: 'feedback', source: 'agent', scope: 'global', load: 'always' })
     check('draftIntent：同 slug，一条取代旧条、一条不取代 → 不互相覆盖，两条都在', without.pending === true && !without.replacedDraft && without.sameSlugDrafts?.includes(withOld.id) && mod.listPending(intents.memoryDir).length === 2, JSON.stringify(without))
-    const again = await call(intents, { body: '回答先给结论。' })
-    check('  …取代对象相同 → 覆盖原来那条', again.replacedDraft === withOld.id && mod.listPending(intents.memoryDir).length === 2, JSON.stringify(again))
+    const again = await intents.tool('memory_remember', { slug: 'answer-first', title: '回答先给结论', body: '回答先给结论，再给理由。', type: 'feedback', source: 'agent', scope: 'global' })
+    check('新按需草稿只覆盖同意图的按需草稿，旧常驻草稿保留', again.replacedDraft === without.id && mod.listPending(intents.memoryDir).length === 2 && mod.listPending(intents.memoryDir).some(d => d.id === withOld.id && d.meta.load === 'always'), JSON.stringify(again))
     const cmd = await intents.command('memory', `accept ${withOld.id}`)
     check('/memory accept 的文字说明删除了旧记忆', cmd.kind === 'success' && /删除了旧记忆 old-pref/.test(cmd.text) && !inGlobal(intents).includes('old-pref'), JSON.stringify(cmd))
   } finally {

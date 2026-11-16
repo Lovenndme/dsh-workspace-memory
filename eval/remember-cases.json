@@ -18,7 +18,7 @@
       ],
       "message": "你怎么用英文回的？我只看得懂中文。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -42,7 +42,7 @@
           ]
         }
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留；原来的「加分：load always」已变成必要条件，删掉。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "A2",
@@ -61,7 +61,7 @@
       ],
       "message": "太绕了，听不懂，用大白话讲。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -75,7 +75,7 @@
           "user"
         ]
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留；原来的「加分：load always」已变成必要条件，删掉。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "A3",
@@ -102,7 +102,7 @@
       ],
       "message": "任务清单里怎么还挂着两项没勾？做完一项就该勾一项。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -115,7 +115,7 @@
           "user"
         ]
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留；原来的「加分：load always」已变成必要条件，删掉。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "A4",
@@ -134,7 +134,7 @@
       ],
       "message": "别一上来就动真的，先出个预览给我看，我点头了再改正式的。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -142,6 +142,9 @@
         ],
         "source": [
           "user"
+        ],
+        "scope": [
+          "global"
         ]
       },
       "workspace": {
@@ -154,7 +157,7 @@
           ]
         }
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "A5",
@@ -173,7 +176,7 @@
       ],
       "message": "用哪个模型、思考强度开多高，这种要先问我，别自己定。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -181,6 +184,9 @@
         ],
         "source": [
           "user"
+        ],
+        "scope": [
+          "global"
         ]
       },
       "workspace": {
@@ -239,7 +245,7 @@
       ],
       "message": "截图一律用浅色模式，别用深色。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -247,6 +253,9 @@
         ],
         "source": [
           "user"
+        ],
+        "scope": [
+          "global"
         ]
       },
       "workspace": {
@@ -254,7 +263,7 @@
           "public/help/settings.png": "\u0000PNG-BINARY"
         }
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "A8",
@@ -302,7 +311,7 @@
       ],
       "message": "界面上不要自己加这种说明文字，我没让加的字一个都别加。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -310,6 +319,9 @@
         ],
         "source": [
           "user"
+        ],
+        "scope": [
+          "global"
         ]
       },
       "workspace": {
@@ -322,7 +334,7 @@
           ]
         }
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "A10",
@@ -357,7 +369,7 @@
       ],
       "message": "这种小改动不用每步都问我，直接做完告诉我就行。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -365,9 +377,12 @@
         ],
         "source": [
           "user"
+        ],
+        "scope": [
+          "global"
         ]
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "B1",
@@ -579,7 +594,7 @@
       ],
       "message": "我是做后端的，前端基本不懂，碰到样式相关的地方你多解释两句。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -603,7 +618,7 @@
           ]
         }
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "D2",
@@ -622,7 +637,7 @@
       ],
       "message": "我平时只用 Windows，给命令的时候别给我 bash 的写法。",
       "accept": [
-        "remember:always"
+        "remember"
       ],
       "remember": {
         "type": [
@@ -636,7 +651,7 @@
           "user"
         ]
       },
-      "note": "2026-11-15 按用户决定修改：跨项目的做事与表达偏好都进全局 AGENTS.md 常驻（memory_remember 的 scope: global + load: always），所以只接受常驻的 remember；原有的 type / scope / source 约束保留。"
+      "note": "2026-11-16 按用户决定修改：自动记的一律进记忆库，跨项目偏好使用 scope: global；不再要求常驻，全局 AGENTS.md 只由用户写。保留原有 type / source 约束。"
     },
     {
       "id": "E1",
@@ -1312,7 +1327,7 @@
       "message": "我不喜欢这种写法。",
       "accept": [
         "ask",
-        "remember:always"
+        "remember"
       ],
       "note": "2026-11-15 按用户决定修改：有长期信号但去向不明，问一句可以；要记就是跨项目的做事偏好，进全局 AGENTS.md 常驻。"
     },
@@ -1334,7 +1349,7 @@
       "message": "这种情况一般先问我一下。",
       "accept": [
         "ask",
-        "remember:always"
+        "remember"
       ],
       "note": "2026-11-15 按用户决定修改：有长期信号但去向不明，问一句可以；要记就是跨项目的做事偏好，进全局 AGENTS.md 常驻。"
     },

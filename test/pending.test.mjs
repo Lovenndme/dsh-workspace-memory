@@ -79,7 +79,7 @@ console.log('\n== pending -> accept ==')
 
     const index = readFileSync(path.join(dir, 'MEMORY.md'), 'utf8')
     check('MEMORY.md 已收录', index.includes('抽取出来的候选记忆'), index.slice(0, 200))
-    check('向量已重建', accepted.vectorCount === 1, JSON.stringify(accepted))
+    check('收下后索引模式与可选向量依赖一致', (await mod.resolveEmbedder()) ? accepted.vectorMode === 'hybrid' && accepted.vectorCount === 1 : accepted.vectorMode === 'keyword' && accepted.vectorCount === 0, JSON.stringify(accepted))
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

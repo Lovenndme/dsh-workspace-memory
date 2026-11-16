@@ -95,7 +95,7 @@ section('各自的要点')
   }
 }
 
-section('入参校验仍在归类之前；project + always 的拒写不变')
+section('入参校验仍在归类之前；旧 load 不再触发项目指令拒写')
 {
   const { h } = repoHost()
   try {
@@ -104,7 +104,7 @@ section('入参校验仍在归类之前；project + always 的拒写不变')
     const badScope = await h.tool('memory_remember', { title: 'X', body: 'y', type: 'docs', scope: 'workspace' })
     check('非法 scope 同样先拒（入参校验通过后才归类）', badScope.reason === 'invalid-argument' && badScope.argument === 'scope', JSON.stringify(badScope))
     const always = await h.tool('memory_remember', { slug: 'p-always', title: 'P always', body: 'y', type: 'feedback', source: 'agent', scope: 'project', load: 'always' })
-    check('project + always 仍是 belongs-in-project-agents', always.reason === 'belongs-in-project-agents' && always.written === false, JSON.stringify(always))
+    check('project + 旧 always 按来源保存记忆，不触发项目指令分支', always.id && always.scope === 'project' && always.loadIgnored === true && always.reason !== 'belongs-in-project-agents' && h.read(h.agentsFile) === AGENTS, JSON.stringify(always))
   } finally {
     h.cleanup()
   }

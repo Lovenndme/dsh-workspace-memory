@@ -119,8 +119,8 @@ console.log('\n== leanvec resolution ==')
     }
     check(
       'leanvec reachable via fallback (or plugin degrades)',
-      found,
-      'neither direct, plugin-owned, nor profile fallback found leanvec',
+      found || (await mod.resolveEmbedder()) === null,
+      'no leanvec found, but resolveEmbedder did not report keyword fallback',
     )
   }
 }

@@ -43,7 +43,7 @@ function collect() {
     mod.writeMemory(host.globalDir, { slug: 'docs-location', title: 'Docs location', description: 'where the shared docs live', body: 'x', type: 'reference', scope: 'global' })
     const index = readFileSync(path.join(host.memoryDir, 'MEMORY.md'), 'utf8').replace(/\r\n/g, '\n')
     const context = String(host.contextText()).replace(/\r\n/g, '\n')
-    return { sections, tools, index, context }
+    return { sections, tools, index, context, extractionSystem: mod.EXTRACTION_SYSTEM }
   } finally {
     host.cleanup()
   }
@@ -98,6 +98,9 @@ section('MEMORY.md 索引格式与每轮注入的索引上下文与基线一致'
   check('MEMORY.md 索引格式不变', current.index === baseline.index, `${RERUN}\n        ${firstDiff(current.index, baseline.index)}`)
   check('每轮注入的索引上下文不变', current.context === baseline.context, `${RERUN}\n        ${firstDiff(current.context, baseline.context)}`)
 }
+
+section('自动抽取提示词全文与基线一致')
+check('EXTRACTION_SYSTEM 与基线逐字一致', current.extractionSystem === baseline.extractionSystem, RERUN)
 
 check('真实的 ~/.dsh/AGENTS.md 与全局按需库一个字节没变', guard.unchanged())
 summary()
