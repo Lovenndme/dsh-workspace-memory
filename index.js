@@ -806,6 +806,22 @@ const historyPath = (memoryDir) => path.join(statePath(memoryDir), 'history')
  * 这里按「一条记忆一个子目录、只留最近 N 版」的方式留档，
  * 回退时直接把历史文件拷回 `memory/<slug>.md` 即可。
  */
+/**
+ * 在 dir 里以「当前时间戳.md」写一份副本，返回文件名。记忆历史与 AGENTS.md 写前备份共用。
+ *
+ * 时间戳只精确到毫秒：同一毫秒内连续留两份（例如更新后立刻删除、升为全局指令时先归档再删）会撞名，
+ * 以前直接覆盖，历史就静默少一份（2026-11-16 Linux CI 上偶发失败暴露）。撞名时依次加 `~01`…`~99`：
+ * `~` 的码位排在 `.` 之后，所以按文件名排序仍是先写的在前，「最旧的先清理」「最新的一份」都不受影响。
+ * 用 `wx` 写，绝不覆盖已有文件；99 个都被占（不可能的情况）就抛出，由调用方按「留档失败」处理。
+ */
+function writeStampedCopy(dir, text) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  let name = `${stamp}.md`
+  for (let n = 1; existsSync(path.join(dir, name)) && n <= 99; n += 1) name = `${stamp}~${String(n).padStart(2, '0')}.md`
+  writeFileSync(path.join(dir, name), text, { encoding: 'utf8', flag: 'wx' })
+  return name
+}
+
 function archiveVersion(memoryDir, id, raw) {
   const limit = CONFIG.historyLimit
   if (!limit || limit <= 0) return
@@ -814,8 +830,7 @@ function archiveVersion(memoryDir, id, raw) {
     const dir = isSafeId(id) ? containedPath(historyPath(memoryDir), id) : null
     if (!dir) return
     ensureDir(dir)
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    writeFileSync(path.join(dir, `${stamp}.md`), raw, 'utf8')
+    writeStampedCopy(dir, raw)
     const kept = readdirSync(dir)
       .filter((name) => name.endsWith('.md'))
       .sort()
@@ -3192,8 +3207,7 @@ function backupAgentsFile(file, text) {
   try {
     const dir = agentsHistoryDir(file)
     ensureDir(dir)
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    writeFileSync(path.join(dir, `${stamp}.md`), text, 'utf8')
+    writeStampedCopy(dir, text)
     const kept = readdirSync(dir)
       .filter((name) => name.endsWith('.md'))
       .sort()

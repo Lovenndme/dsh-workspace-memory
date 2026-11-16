@@ -726,5 +726,53 @@ console.log('\n== openAgentsFile 系统默认分支的命令行（2026-11-15 收
   }
 }
 
+console.log('\n== 同一毫秒内连续留档：文件名不撞、不覆盖，按名排序仍是先写的在前 ==')
+{
+  // 2026-11-16 Linux CI 偶发「删除后历史只有 1 份」：更新与删除落在同一毫秒，时间戳文件名相同，后一份覆盖了前一份。
+  // 这里把时间冻住，让撞名必然发生，不再依赖机器快慢。
+  const RealDate = Date
+  const FIXED = RealDate.UTC(2026, 10, 16, 3, 5, 41, 730)
+  globalThis.Date = class FrozenDate extends RealDate {
+    constructor(...args) {
+      super(...(args.length > 0 ? args : [FIXED]))
+    }
+    static now() {
+      return FIXED
+    }
+  }
+  const env = makeEnv()
+  try {
+    const id = 'same-ms-archive'
+    writeFileSync(path.join(env.memoryDir, `${id}.md`), '---\nname: x\ntitle: 第一版\n---\n\n第一版正文\n', 'utf8')
+    mod.writeMemory(env.memoryDir, { id, body: '第二版正文' })
+    mod.writeMemory(env.memoryDir, { id, body: '第三版正文' })
+    check('删除成功', mod.deleteMemory(env.memoryDir, id) === true)
+    const history = mod.listHistory(env.memoryDir, id)
+    check('同一毫秒留档三次 → 历史 3 份', history.length === 3, history.map((h) => h.name).join(', '))
+    const oldestFirst = history.map((h) => readFileSync(h.file, 'utf8')).reverse()
+    check(
+      '  …按文件名排序就是写入顺序（第一版 → 第二版 → 第三版）',
+      oldestFirst.length === 3 && oldestFirst[0].includes('第一版正文') && oldestFirst[1].includes('第二版正文') && oldestFirst[2].includes('第三版正文'),
+      history.map((h) => h.name).join(', '),
+    )
+
+    const first = mod.saveAgentsSection(0, { title: '不能被动的章', body: '改一次' })
+    const second = mod.saveAgentsSection(0, { title: '不能被动的章', body: '改两次' })
+    const backupDir = path.join(path.dirname(env.agentsFile), '.agents-history')
+    const backups = existsSync(backupDir) ? readdirSync(backupDir).filter((name) => name.endsWith('.md')).sort() : []
+    check('AGENTS.md 同一毫秒写两次 → 备份 2 份', first.ok === true && second.ok === true && backups.length === 2, backups.join(', '))
+    check(
+      '  …先写的备份是原文，后写的是第一次修改后的内容',
+      backups.length === 2 &&
+        readFileSync(path.join(backupDir, backups[0]), 'utf8').includes('内容。') &&
+        readFileSync(path.join(backupDir, backups[1]), 'utf8').includes('改一次'),
+      backups.join(', '),
+    )
+  } finally {
+    globalThis.Date = RealDate
+    env.cleanup()
+  }
+}
+
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)
 process.exit(failures === 0 ? 0 : 1)
