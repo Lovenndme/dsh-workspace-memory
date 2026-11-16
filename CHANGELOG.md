@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.4 — 2026-11-16
+
+- fix(storage): never overwrite a history copy written in the same millisecond
+- docs(readme): update the command section for the /memory picker and merged subcommands
+- refactor(command): drop the standalone /memory_extract and /memory_pending commands
+- feat(command): /memory overview aligned with the panel, subcommand picker, help/status, Chinese messages
+- fix(client): register the client module under the npm package name; add a Memory entry to the right-bar start page
+
+
 ## 0.8.3 — 2026-11-15
 
 - ci: note why windows+node 18 is intentionally not in the matrix
