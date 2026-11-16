@@ -42,21 +42,22 @@ section('/memory 总览、/memory list：两个库分开，分类用显示名')
   const host = makeHost(mod, { config: { maxMemoryCount: 30 } })
   try {
     const empty = await host.command('memory', 'list')
-    check('两个库都空 → 一句话', empty.kind === 'success' && empty.text === '项目记忆和通用记忆里都还没有记忆。', empty.text)
+    check('两个库都空 → 一句话，再说怎么开始记', empty.kind === 'success' && empty.text.startsWith('项目记忆和通用记忆里都还没有记忆。\n') && empty.text.includes('/memory extract'), empty.text)
 
     mod.writeMemory(host.memoryDir, { slug: 'p-dec', title: '项目决定一条', body: 'x', type: 'project' })
     mod.writeMemory(host.memoryDir, { slug: 'p-pit', title: '踩坑一条', body: 'x', type: 'pitfall' })
     mod.writeMemory(host.globalDir, { slug: 'g-ref', title: '资料在哪', body: 'x', type: 'reference', scope: 'global' })
 
+    // 2026-11-15 起总览按面板「记忆地图」排（每轮都读 / 用到才查），细节见 test/memory-command.test.mjs
     const overview = await host.command('memory', '')
-    check('总览：项目记忆条数、上限与分类', /^项目记忆：2 条（上限 30 条）  项目决定 1 · 踩坑经验 1$/m.test(overview.text), overview.text)
-    check('  …通用记忆单独一行', /^通用记忆：1 条（上限 30 条）  资料位置 1$/m.test(overview.text), overview.text)
+    check('总览：项目记忆条数 / 上限与分类', /^  项目记忆  2 \/ 30 条 · 项目决定 1 · 踩坑经验 1$/m.test(overview.text), overview.text)
+    check('  …通用记忆单独一行', /^  通用记忆  1 \/ 30 条 · 资料位置 1$/m.test(overview.text), overview.text)
     check('  …不再有英文的 Memories / Global 行，也没有裸分类键', !/Memories:|Global \(all projects|^\s+project: \d/m.test(overview.text), overview.text)
 
     const list = await host.command('memory', 'list')
     const lines = list.text.split('\n')
     check('/memory list：分组标题带库名、forget 用的英文键与条数', lines[0] === '项目记忆（project）2 条：' && lines.includes('通用记忆（global）1 条：'), list.text)
-    check('  …每行分类是显示名', lines.some((line) => line === '  p-pit  [踩坑经验]  踩坑一条') && lines.some((line) => line === '  g-ref  [资料位置]  资料在哪'), list.text)
+    check('  …每行分类是显示名，末尾是更新时间', lines.some((line) => /^  p-pit  \[踩坑经验\]  踩坑一条 +刚刚$/.test(line)) && lines.some((line) => line === '  g-ref  [资料位置]  资料在哪  刚刚'), list.text)
     check('  …通用记忆的条目在它自己的组里', list.text.indexOf('g-ref') > list.text.indexOf('通用记忆（global）'))
 
     const listCmd = await host.command('memory_list', undefined)
@@ -66,7 +67,7 @@ section('/memory 总览、/memory list：两个库分开，分类用显示名')
     check('/memory_list 的命令描述（补全菜单那行）与新面板相符', listDescription === '打开记忆面板：总览、待确认、指令、记忆', listDescription)
 
     const forgot = await host.command('memory', 'forget g-ref')
-    check('/memory forget 回执用库的显示名', forgot.kind === 'success' && forgot.text.startsWith('已删除 g-ref（通用记忆；') && !/undefined/.test(forgot.text), forgot.text)
+    check('/memory forget 回执用库的显示名', forgot.kind === 'success' && forgot.text.startsWith('已删除「资料在哪」（g-ref，通用记忆）。') && !/undefined/.test(forgot.text), forgot.text)
     mod.writeMemory(host.globalDir, { slug: 'p-dec', title: '同名', body: 'x', scope: 'global' })
     const ambiguous = await host.command('memory', 'forget p-dec')
     check('  …两个库都命中：说明 project / global 各指哪个库', ambiguous.kind === 'error' && ambiguous.text.includes('project（项目记忆）或 global（通用记忆）') && ambiguous.text.includes('p-dec（项目记忆，project）'), ambiguous.text)
@@ -89,9 +90,14 @@ section('/memory pending 与 /memory accept：去向、分类、来源用显示�
     mod.writePending(host.memoryDir, { id: 'dr_glob', title: '通用的', body: 'x', type: 'reference', scope: 'global', load: 'on-demand', source: 'user', evidence: 'x', evidenceVerified: false })
     mod.writePending(host.memoryDir, { id: 'dr_proj', title: '项目的', body: 'x', type: 'project', scope: 'project', load: 'on-demand', slug: 'proj-draft' })
     const out = await host.command('memory', 'pending')
-    const line = (id) => out.text.split('\n').find((l) => l.startsWith(id)) ?? ''
-    check('写进全局指令、更新某一章：按章标题说', line('dr_upd').includes('[做事要求]') && line('dr_upd').includes('→ 全局指令（') && line('dr_upd').includes('更新「回答风格」这一章') && line('dr_upd').endsWith('你的原话 · 已核对'), line('dr_upd'))
-    check('写进全局指令、新增一章', line('dr_new').includes('[关于你]') && line('dr_new').includes('新增一章') && line('dr_new').endsWith('Agent 总结'), line('dr_new'))
+    // 每条两行：「N. [类型] 标题」+ 缩进的「→ 去向 · 来源 · id」；这里把两行拼起来，按末尾的 id 找
+    const rows = out.text.split('\n')
+    const line = (id) => {
+      const at = rows.findIndex((l) => l.endsWith(` · ${id}`))
+      return at > 0 ? `${rows[at - 1]}\n${rows[at].slice(0, -` · ${id}`.length)}` : ''
+    }
+    check('写进全局指令、更新某一章：按章标题说', line('dr_upd').includes('[做事要求]') && line('dr_upd').includes('→ 全局指令 · 更新「回答风格」这一章') && line('dr_upd').endsWith('你的原话 · 已核对'), line('dr_upd'))
+    check('写进全局指令、新增一章', line('dr_new').includes('[关于你]') && line('dr_new').includes('→ 全局指令 · 新增一章') && line('dr_new').endsWith('Agent 总结'), line('dr_new'))
     check('本项目常驻 → 项目指令（插件不收）', line('dr_projall').includes('→ 项目指令（'), line('dr_projall'))
     check('通用记忆 / 项目记忆', line('dr_glob').includes('→ 通用记忆') && line('dr_glob').endsWith('说是你的原话 · 没核对上') && line('dr_proj').includes('→ 项目记忆'), out.text)
     check('不出现旧叫法与「节」', !/所有项目（按需）|本工作区|模型得出|未核实|节/.test(out.text), out.text)

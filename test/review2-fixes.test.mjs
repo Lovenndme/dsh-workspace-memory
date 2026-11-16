@@ -157,7 +157,8 @@ section('N4 收尾：/memory pending 的来源标签与面板同一套规则')
     mod.writePending(h.memoryDir, { id: 'dr_agent', title: '模型自己的', body: 'x', source: 'agent' })
     mod.writePending(h.memoryDir, { id: 'dr_none', title: '没有来源的', body: 'x' })
     const out = await h.command('memory', 'pending')
-    const line = (id) => out.text.split('\n').find((l) => l.startsWith(id)) ?? ''
+    // 2026-11-15 起每条两行，第二行是「→ 去向 · 来源 · id」：取那一行、去掉末尾的 id，来源就在行尾
+    const line = (id) => out.text.split('\n').find((l) => l.endsWith(` · ${id}`))?.slice(0, -` · ${id}`.length) ?? ''
     // 2026-11-15 起用面板的叫法：你的原话 · 已核对 / 说是你的原话 · 没核对上 / 你的原话 · 旧条目未核对 / Agent 总结
     check('source: user 且 evidenceVerified: true →「你的原话 · 已核对」', /你的原话 · 已核对$/.test(line('dr_user_ok')), line('dr_user_ok'))
     check('source: user 但 evidenceVerified: false →「说是你的原话 · 没核对上」，不说成已核对', /说是你的原话 · 没核对上$/.test(line('dr_user_no')) && !line('dr_user_no').includes('已核对'), line('dr_user_no'))

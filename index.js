@@ -6755,12 +6755,14 @@ export function apply(ctx, rawConfig) {
     () =>
       ctx.commands.register({
         name: 'memory',
-        description:
-          '查看与管理工作区记忆：/memory（总览）| list | pending | accept <id> | reject <id> | extract | forget <id> | reindex',
-        // 补全菜单只补「命令名」，子命令补不出来；input.hint 就是给参数留的提示位，
-        // 否则用户只能靠猜 /memory 后面能跟什么（extract 一度因此被认为不存在）。
+        // 补全菜单那一行（给人看）：一句话说清能做什么，子命令的全貌交给 /memory help
+        description: '查看和管理记忆：总览、待确认、抽取、列表（/memory help 看全部子命令）',
+        // 宿主的命令接口只有「hint + attachments」，没有参数候选（dsh docs/subsystems/commands.md 的 CommandInputDescriptor）；
+        // hint 是敲完 `/memory ` 之后输入框里的占位提示。只放最常用的几个并带中文含义，其余（accept / reject / forget /
+        // reindex / status）照样能用，收进 /memory help。hint 不能为空：空串会让整个插件激活失败。
+        // 能点选的子命令列表在客户端：client.js 用 commandUi.decorate 给「只敲 /memory」挂了一个选单（DSH 0.2.2 起）。
         input: {
-          hint: 'list | pending | accept <id> | reject <id> | extract | forget <id> | reindex',
+          hint: 'pending 待确认 · extract 抽取 · list 全部 · help 更多',
         },
         handler: (invocation) => executeMemoryCommand(ctx, invocation),
       }),
@@ -6769,8 +6771,9 @@ export function apply(ctx, rawConfig) {
 
   /* —— 无参子命令各注册一个独立命令 ——————————————————————————————
    * 为什么要拆：DSH 的命令补全只补**命令名**，没有参数级补全
-   * （client Service 里没有任何 completion 接口）。所以想让用户从列表里点选
+   * （宿主 CommandInputDescriptor 只有 hint 与 attachments）。所以想让用户从补全菜单里点选
    * `/memory extract`，只能把 extract 本身注册成一个命令。
+   * （DSH 0.2.2 起客户端另有 commandUi.decorate：client.js 给「只敲 /memory」挂了子命令选单，见那里的说明。）
    * 带 id 的 accept / reject / forget 不拆分——选完还得手打 id，
    * 那几个操作在面板的待确认/详情页里点按钮更省事。
    */
@@ -6837,6 +6840,470 @@ export function apply(ctx, rawConfig) {
 
 /* --------------------------------------------------------------- 命令实现 */
 
+/*
+ * 斜杠命令的回执**只给人看**（结果卡片里的等宽文本），一律用面板的叫法（docs/PANEL.md §2）：
+ * 全局指令 / 项目指令（团队、仅你）/ 通用记忆 / 项目记忆 / 待确认，分类用 TYPE_LABELS，来源用 sourceLabel。
+ * 给模型看的文字（系统提示段、工具说明与返回值、MEMORY.md 索引）不经过这里，test/model-visible-text.test.mjs 守着它们一字不变；
+ * memory_status 工具的输出也是给模型的，与这里的 /memory status 是两回事。
+ */
+
+/** `/memory` 的子命令（help 与「你是不是想输入」都按它）。delete 是 forget 的旧别名、overview 是空输入的别名，都不进建议。 */
+const MEMORY_SUBCOMMANDS = ['pending', 'extract', 'list', 'status', 'help', 'accept', 'reject', 'forget', 'reindex']
+
+/**
+ * 有人照着输入提示（`pending 待确认 · …`）打了中文：给出对应的英文子命令，**不直接执行**——
+ * extract 会调一次模型，猜错了代价不对称。值为 '' 表示总览（`/memory` 本身）。
+ */
+const SUBCOMMAND_ALIASES = {
+  总览: '',
+  概览: '',
+  待确认: 'pending',
+  草稿: 'pending',
+  抽取: 'extract',
+  提取: 'extract',
+  全部: 'list',
+  列表: 'list',
+  状态: 'status',
+  诊断: 'status',
+  帮助: 'help',
+  更多: 'help',
+  收下: 'accept',
+  丢弃: 'reject',
+  删除: 'forget',
+  重建索引: 'reindex',
+}
+
+/** `/memory list` 每个库最多列几条（按更新时间取最近的），其余去面板看。 */
+const LIST_SHOW_MAX = 30
+/** `/memory list` 标题列最多占几格（显示宽度），超出截断加「…」，时间列才对得齐。 */
+const LIST_TITLE_WIDTH = 36
+
+/**
+ * 一个字符在等宽字体里占几格：中日韩文字、全角标点算 2，组合附加符与零宽字符算 0，其余算 1。
+ * 结果卡片是等宽文本，按字符数补空格的话，一行中文会把后面的列挤歪。
+ */
+function charWidth(code) {
+  if (code < 0x20 || (code >= 0x7f && code < 0xa0)) return 0
+  if ((code >= 0x300 && code <= 0x36f) || code === 0x200b || code === 0x200c || code === 0x200d || code === 0xfeff) return 0
+  if (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0x303e) ||
+    (code >= 0x3041 && code <= 0x33ff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xa000 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1f64f) ||
+    (code >= 0x1f900 && code <= 0x1f9ff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  ) {
+    return 2
+  }
+  return 1
+}
+
+/** 文本的显示宽度（等宽字体里的格数）。 */
+export function displayWidth(text) {
+  let width = 0
+  for (const ch of String(text ?? '')) width += charWidth(ch.codePointAt(0))
+  return width
+}
+
+/** 在右边补空格补到 `width` 格（按显示宽度，不是字符数）；已经够宽就原样返回。 */
+export function padDisplay(text, width) {
+  const value = String(text ?? '')
+  return value + ' '.repeat(Math.max(0, width - displayWidth(value)))
+}
+
+/** 超过 `width` 格就截断，末尾加「…」（整体不超过 width 格）。 */
+function clipDisplay(text, width) {
+  const value = String(text ?? '')
+  if (displayWidth(value) <= width) return value
+  let out = ''
+  let used = 0
+  for (const ch of value) {
+    const w = charWidth(ch.codePointAt(0))
+    if (used + w > width - 1) break
+    out += ch
+    used += w
+  }
+  return `${out}…`
+}
+
+/** 多列对齐：除最后一列外，每列按这一列最宽的单元格补齐；`indent` 加在每行前面。 */
+function alignColumns(rows, { indent = '', gap = '  ' } = {}) {
+  const widths = []
+  for (const row of rows) {
+    row.forEach((cell, i) => {
+      if (i < row.length - 1) widths[i] = Math.max(widths[i] ?? 0, displayWidth(cell))
+    })
+  }
+  return rows.map((row) => `${indent}${row.map((cell, i) => (i < row.length - 1 ? padDisplay(cell, widths[i]) : cell)).join(gap)}`.trimEnd())
+}
+
+const formatInt = (n) => Number(n).toLocaleString('en-US')
+
+/** 字节 → KB 文字，与面板的 kb() 同口径（1000 进制，10 KB 以下保留一位小数）。 */
+export function kbText(bytes) {
+  const b = Number(bytes) || 0
+  if (!b) return '0'
+  const kilo = b / 1000
+  return kilo >= 10 ? String(Math.round(kilo * 10) / 10) : kilo.toFixed(1)
+}
+
+/** 粗估 tokens：字节 ÷ 3.5 取整，与面板的 tokensOf() 同口径。 */
+export const tokensOfBytes = (bytes) => Math.round((Number(bytes) || 0) / 3.5)
+
+/** 相对时间，措辞与面板的 relTime()（中文）一致：刚刚 / N 分钟前 / N 小时前 / 昨天 / N 天前 / N 个月前。坏值返回空串。 */
+export function relativeTimeZh(ms, now = Date.now()) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return ''
+  const seconds = Math.max(0, (now - ms) / 1000)
+  if (seconds < 60) return '刚刚'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`
+  const days = Math.floor(seconds / 86400)
+  if (days === 1) return '昨天'
+  if (days < 31) return `${days} 天前`
+  return `${Math.floor(days / 30)} 个月前`
+}
+
+/** 一条记忆「最后更新」的时间：frontmatter 的 modified，没有或读不懂就用文件时间（ms）。 */
+function memoryUpdatedAt(item) {
+  const fromMeta = Date.parse(String(item?.meta?.modified ?? ''))
+  if (Number.isFinite(fromMeta)) return fromMeta
+  return Number.isFinite(item?.mtime) ? item.mtime : null
+}
+
+/**
+ * 每轮固定开销，**与面板「每轮固定开销」同一套算法**（client.js 的 costParts / indexBytes / indexLine / tokensOf；
+ * test/memory-command.test.mjs 用宿主路由的真实响应喂给面板的函数，与这里对拍）：
+ * 全局指令的字节 + 项目指令团队 / 仅你（存在才算）+ 两个库的索引估算（每个有条目的库一份「# Memory Index」+ 每条一行）。
+ * 只是估算：真实注入还受行数与字节上限影响，面板与这里都不扣。`libraries` 是 `[{ items: [{ id, description }] }]`。
+ */
+export function perTurnCost({ agentsBytes = 0, teamBytes = 0, localBytes = 0, libraries = [] } = {}) {
+  const indexLine = (id, description) => {
+    const link = String(id).replace(/[-_]+/g, ' ')
+    return description ? `- [${link}](${id}.md) — ${description}` : `- [${link}](${id}.md)`
+  }
+  let indexBytes = 0
+  for (const library of libraries) {
+    const items = library?.items ?? []
+    if (items.length > 0) {
+      indexBytes += Buffer.byteLength(`# Memory Index\n\n${items.map((item) => indexLine(item.id, item.description)).join('\n')}\n`, 'utf8')
+    }
+  }
+  const parts = [
+    { key: 'global', bytes: Number(agentsBytes) || 0 },
+    { key: 'team', bytes: Number(teamBytes) || 0 },
+    { key: 'local', bytes: Number(localBytes) || 0 },
+    { key: 'index', bytes: indexBytes },
+  ].filter((part) => part.bytes > 0)
+  const bytes = parts.reduce((total, part) => total + part.bytes, 0)
+  return { parts, bytes, tokens: tokensOfBytes(bytes) }
+}
+
+/** 开销各段的显示名（与面板「每轮固定开销」的图例同名）。 */
+const COST_PART_LABELS = { global: INSTRUCTION_LABELS.global, team: `${INSTRUCTION_LABELS.project} · 团队`, local: `${INSTRUCTION_LABELS.project} · 仅你`, index: '记忆索引' }
+
+/** 两条编辑距离（相邻对调算一步）。只用来给「你是不是想输入」挑候选。 */
+function editDistance(a, b) {
+  const rows = a.length + 1
+  const cols = b.length + 1
+  const d = Array.from({ length: rows }, (_, i) => Array.from({ length: cols }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)))
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost)
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1)
+    }
+  }
+  return d[rows - 1][cols - 1]
+}
+
+/**
+ * 打错的子命令 → 最可能想要的那个；猜不出来返回 null。依次看：输入提示里的中文含义、唯一的前缀、编辑距离
+ * （4 个字母以内容 1 处错，更长的容 2 处）。返回 '' 表示总览（`/memory` 本身）。
+ */
+export function suggestSubcommand(input) {
+  const word = String(input ?? '').trim().toLowerCase()
+  if (!word) return null
+  if (Object.hasOwn(SUBCOMMAND_ALIASES, word)) return SUBCOMMAND_ALIASES[word]
+  const prefixed = MEMORY_SUBCOMMANDS.filter((name) => name.startsWith(word) || word.startsWith(name))
+  if (prefixed.length === 1) return prefixed[0]
+  let best = null
+  let bestDistance = Infinity
+  for (const name of MEMORY_SUBCOMMANDS) {
+    const distance = editDistance(word, name)
+    if (distance < bestDistance) {
+      best = name
+      bestDistance = distance
+    }
+  }
+  return bestDistance <= (word.length <= 4 ? 1 : 2) ? best : null
+}
+
+/** 状态里的路径：DSH 主目录下的写成 `~/.dsh/…`（或 `$DSH_HOME/…`），用户主目录下的写成 `~/…`，其余原样。 */
+function displayPath(target) {
+  const abs = path.resolve(String(target))
+  const under = (base) => {
+    const rel = path.relative(path.resolve(base), abs)
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)) ? rel : null
+  }
+  const inHome = under(dshHome())
+  if (inHome !== null) return inHome ? `${dshHomeDisplay()}/${inHome.split(path.sep).join('/')}` : dshHomeDisplay()
+  const inUser = under(os.homedir())
+  if (inUser !== null) return inUser ? `~/${inUser.split(path.sep).join('/')}` : '~'
+  return abs
+}
+
+/**
+ * 总览与 /memory status 共用的事实（只读）。数据来源与面板的路由相同：
+ * 全局指令 = agentsStatus()（/agents）；项目指令 = instructionsRootOf + 固定文件名 + realpath 校验（/project-agents 的 locateWorkspaceFile）；
+ * 两个库 = librariesFor + listMemories（/list）；待确认 = listPending。
+ */
+function memoryFacts(ctx, who, memoryDir) {
+  const workspaceRoot = workspaceRootOf(ctx, who)
+  const instructionsRoot = instructionsRootOf(ctx, who)
+  const projectFile = (name) => {
+    if (!instructionsRoot) return { name, state: 'unknown', bytes: 0 }
+    const located = locateWorkspaceFile(instructionsRoot, name)
+    return { name, state: located.state, bytes: located.state === 'ok' ? located.stat.size : 0, path: located.path, error: located.error }
+  }
+  const libraries = librariesFor(memoryDir).map((library) => ({ ...library, items: listMemories(library.dir) }))
+  const agents = agentsStatus()
+  const team = projectFile(PROJECT_AGENTS_FILES.team)
+  const local = projectFile(PROJECT_AGENTS_FILES.local)
+  return {
+    workspaceName: workspaceRoot ? path.basename(workspaceRoot) || workspaceRoot : '',
+    instructionsRoot,
+    libraries,
+    agents,
+    team,
+    local,
+    pending: listPending(memoryDir).length,
+    cost: perTurnCost({
+      agentsBytes: agents.exists ? agents.bytes : 0,
+      teamBytes: team.bytes,
+      localBytes: local.bytes,
+      libraries: libraries.map((library) => ({ items: library.items.map((item) => ({ id: item.id, description: item.meta.description ?? '' })) })),
+    }),
+  }
+}
+
+/** 索引（MEMORY.md）列的条数与记忆文件数对不上的库（上次重建失败或有人手改过），与 memory_status 同一判据。 */
+const staleLibrariesOf = (libraries) => libraries.filter((library) => indexEntryCount(library.dir) !== library.items.length)
+
+/** 一个库按类型的计数（面板叫法，按 MEMORY_TYPES 的顺序；手写的怪类型原样显示）。 */
+function typeBreakdown(items) {
+  const byType = new Map()
+  for (const item of items) {
+    const type = item.meta.type ?? 'project'
+    byType.set(type, (byType.get(type) ?? 0) + 1)
+  }
+  const known = MEMORY_TYPES.filter((type) => byType.has(type))
+  const odd = [...byType.keys()].filter((type) => !MEMORY_TYPES.includes(type))
+  return [...known, ...odd].map((type) => `${typeLabel(type)} ${byType.get(type)}`)
+}
+
+/** `/memory` 总览：按面板「记忆地图」的心智模型，最该处理的放最前，不出现本机路径与配置键名。 */
+async function overviewText(ctx, invocation, memoryDir) {
+  const facts = memoryFacts(ctx, { agent: invocation?.agent }, memoryDir)
+  const embedder = await resolveEmbedder()
+  const lines = [facts.workspaceName ? `记忆总览 · ${facts.workspaceName}` : '记忆总览']
+
+  lines.push(facts.pending > 0 ? `待确认 ${facts.pending} 条 → /memory pending 查看，或在记忆面板「待确认」页处理` : '没有待确认的内容')
+  for (const library of staleLibrariesOf(facts.libraries)) {
+    lines.push(`注意：${LIBRARY_LABELS[library.scope]}的索引和记忆文件对不上，有的记忆不会出现在每轮索引里 → /memory reindex`)
+  }
+  if (configIssues.length > 0) lines.push(`注意：插件配置有 ${configIssues.length} 处问题，已按默认值处理 → /memory status 查看`)
+
+  const { agents } = facts
+  const limit = CONFIG.maxAgentsBytes
+  let globalText = '还没有创建'
+  if (agents.exists) {
+    const percent = limit > 0 ? Math.round((agents.bytes / limit) * 100) : 0
+    globalText =
+      limit > 0
+        ? `${agents.sections} 章 · ${kbText(agents.bytes)} / ${kbText(limit)} KB（${percent}%${percent >= 80 ? '，快满了' : ''}）`
+        : `${agents.sections} 章 · ${kbText(agents.bytes)} KB（不限大小）`
+  }
+  const fileText = (file) =>
+    file.state === 'ok' ? `${kbText(file.bytes)} KB` : file.state === 'missing' ? '未创建' : file.state === 'error' ? '读不出来' : '暂时读不到'
+  const projectText = `团队 ${fileText(facts.team)} · 仅你 ${fileText(facts.local)}`
+
+  const libraryText = (library) => {
+    if (library.items.length === 0) return '还没有记忆'
+    const count = CONFIG.maxMemoryCount > 0 ? `${library.items.length} / ${CONFIG.maxMemoryCount} 条` : `${library.items.length} 条`
+    return [count, ...typeBreakdown(library.items)].join(' · ')
+  }
+  // 「用到才查」先通用记忆、后项目记忆：与面板地图的行序（所有项目 / 本项目）一致
+  const ordered = [...facts.libraries].sort((a, b) => (a.scope === 'global' ? 0 : 1) - (b.scope === 'global' ? 0 : 1))
+  const label = (text) => padDisplay(text, 8)
+
+  lines.push(
+    '',
+    '每轮都读',
+    `  ${label(INSTRUCTION_LABELS.global)}  ${globalText}`,
+    `  ${label(INSTRUCTION_LABELS.project)}  ${projectText}`,
+    '用到才查',
+    ...ordered.map((library) => `  ${label(LIBRARY_LABELS[library.scope])}  ${libraryText(library)}`),
+    facts.cost.bytes > 0
+      ? `每轮固定开销约 ${formatInt(facts.cost.tokens)} tokens（按字节粗估：${facts.cost.parts.map((part) => COST_PART_LABELS[part.key]).join(' + ')}）`
+      : '每轮没有固定带上的内容',
+    '',
+    embedder ? '检索：向量 + 关键词' : '检索：只用关键词（装上 leanvec 能认出换个说法的问题）',
+    CONFIG.agentWrites === 'direct'
+      ? '写入：Agent 自己总结的记忆直接存；要写进全局指令的仍先进待确认'
+      : '写入：Agent 自己总结的、要写进全局指令的，都先进待确认',
+    '/memory_list 打开面板 · /memory help 查看全部子命令',
+  )
+  return lines.join('\n')
+}
+
+/** `/memory status`：总览里不放的诊断细节（库的位置、索引、向量、开关、配置问题）。路径里的主目录写成符号。 */
+async function statusText(ctx, invocation, memoryDir) {
+  const facts = memoryFacts(ctx, { agent: invocation?.agent }, memoryDir)
+  const embedder = await resolveEmbedder()
+  const stale = new Set(staleLibrariesOf(facts.libraries).map((library) => library.scope))
+  const lines = [facts.workspaceName ? `记忆状态 · ${facts.workspaceName}` : '记忆状态']
+
+  for (const library of facts.libraries) {
+    const isGlobal = library.scope === 'global'
+    const index = readIndexForInjection(library.dir, isGlobal ? { maxLines: CONFIG.globalIndexMaxLines } : {})
+    const maxLines = isGlobal ? CONFIG.globalIndexMaxLines : CONFIG.indexMaxLines
+    const listed = indexEntryCount(library.dir)
+    const vectors = loadVectors(library.dir)
+    const builtAt = vectors ? relativeTimeZh(Date.parse(String(vectors.builtAt ?? ''))) : ''
+    const rows = [
+      ['位置', displayPath(library.dir)],
+      ['条数', CONFIG.maxMemoryCount > 0 ? `${library.items.length} / ${CONFIG.maxMemoryCount}` : `${library.items.length}（不限）`],
+      [
+        '每轮索引',
+        `${formatInt(Buffer.byteLength(index, 'utf8'))} 字节 / ${index ? index.split(/\r?\n/).length : 0} 行` +
+          `（上限 ${formatInt(CONFIG.indexMaxBytes)} 字节 / ${maxLines} 行${isGlobal && maxLines === 0 ? '，0 = 不注入' : ''}）`,
+      ],
+      [
+        '索引文件',
+        stale.has(library.scope)
+          ? `和记忆文件对不上：MEMORY.md 列了 ${listed === null ? '（读不出来）' : `${listed} 条`}，实际有 ${library.items.length} 个记忆文件 → /memory reindex`
+          : '正常',
+      ],
+      ['向量', vectors ? `${vectors.entries.length} 条（只在内存里${builtAt ? `，${builtAt}建的` : ''}）` : '还没建（第一次检索时在内存里建）'],
+      ['历史版本', CONFIG.historyLimit > 0 ? `该库旁的 .memory-state/history/，每条最多留 ${CONFIG.historyLimit} 版` : '不留（historyLimit 为 0）'],
+    ]
+    lines.push('', LIBRARY_LABELS[library.scope], ...alignColumns(rows, { indent: '  ' }))
+  }
+
+  const { agents } = facts
+  const limit = CONFIG.maxAgentsBytes
+  lines.push(
+    '',
+    INSTRUCTION_LABELS.global,
+    ...alignColumns(
+      [
+        ['位置', displayPath(agentsFilePath())],
+        [
+          '大小',
+          agents.exists
+            ? `${agents.sections} 章 · ${formatInt(agents.bytes)}${limit > 0 ? ` / ${formatInt(limit)}` : ''} 字节${limit > 0 ? '' : '（不限大小）'}`
+            : '还没有创建（面板「指令」页可以新建）',
+        ],
+      ],
+      { indent: '  ' },
+    ),
+  )
+  const projectRow = (label, file) => [
+    label,
+    file.state === 'ok'
+      ? `${file.name} ${formatInt(file.bytes)} 字节`
+      : file.state === 'missing'
+        ? `${file.name} 未创建`
+        : file.state === 'error'
+          ? `${file.name} 读不出来：${file.error}`
+          : `${file.name} 暂时读不到`,
+  ]
+  lines.push(
+    '',
+    `${INSTRUCTION_LABELS.project}（会话目录往上最近的 .git 所在处）`,
+    ...alignColumns(
+      [['位置', facts.instructionsRoot ? displayPath(facts.instructionsRoot) : '暂时读不到'], projectRow('团队', facts.team), projectRow('仅你', facts.local)],
+      { indent: '  ' },
+    ),
+  )
+
+  lines.push(
+    '',
+    ...alignColumns([
+      ['待确认', `${facts.pending} 条（草稿在项目记忆旁的 .memory-state/pending/）`],
+      ['检索', embedder ? `向量 + 关键词（leanvec，${VECTOR_DIM} 维）` : '只用关键词（没找到 leanvec，装法见 README「安装」）'],
+      [
+        '写入',
+        `agentWrites: ${CONFIG.agentWrites} — ${CONFIG.agentWrites === 'direct' ? 'Agent 自己总结的直接存' : 'Agent 自己总结的先进待确认'}；要写进全局指令的一律先进待确认`,
+      ],
+      [
+        '自动抽取',
+        CONFIG.enableExtraction
+          ? `开（enableExtraction），每 ${CONFIG.extractEveryTurns} 轮一次，每次最多 ${CONFIG.extractMaxPerTurn} 条`
+          : '关（enableExtraction: false）；/memory extract 可以手动跑一次',
+      ],
+      ['每轮固定开销', facts.cost.bytes > 0 ? `约 ${formatInt(facts.cost.tokens)} tokens（${formatInt(facts.cost.bytes)} 字节 ÷ 3.5）` : '0'],
+      ['配置问题', configIssues.length === 0 ? '无' : `${configIssues.length} 处`],
+    ]),
+    ...configIssues.map((issue) => `  - ${issue}`),
+  )
+  return lines.join('\n')
+}
+
+/** `/memory help`：分「常用 / 需要 id 的操作 / 整理」三组，每个子命令一行「用法  做什么」。 */
+function helpText() {
+  const common = alignColumns(
+    [
+      ['/memory', '总览：待确认、每轮带上的指令、项目记忆与通用记忆'],
+      ['/memory pending', '列出待确认的草稿（同 /memory_pending）'],
+      ['/memory extract', '立刻从这段对话里找值得记的，结果进待确认（同 /memory_extract）'],
+      ['/memory list', '列出项目记忆与通用记忆里的全部条目'],
+      ['/memory status', '诊断：库的位置、索引、向量、配置问题'],
+    ],
+    { indent: '  ' },
+  )
+  const withId = alignColumns(
+    [
+      ['/memory accept <id>', '收下一条草稿 — 面板「待确认」页的「收下」'],
+      ['/memory reject <id>', '丢弃一条草稿，不留历史 — 面板「待确认」页的「丢弃」'],
+      ['/memory forget <id>', '删除一条记忆，删前留历史版本 — 面板「记忆」页打开这条，「更多操作」里的「删除这条记忆」'],
+    ],
+    { indent: '  ' },
+  )
+  return [
+    '/memory 子命令',
+    '',
+    '常用',
+    ...common,
+    '',
+    '需要 id 的操作（id 从 /memory pending、/memory list 里找；在面板里点按钮更方便）',
+    ...withId,
+    '  两个库有同一个 id 时，forget 后面加 project（项目记忆）或 global（通用记忆）',
+    '',
+    '整理：/memory reindex（手改过记忆文件后重建索引）',
+    '',
+    '/memory_list 打开记忆面板',
+  ].join('\n')
+}
+
+/** 未知子命令：中文说明 + 「你是不是想输入」（带上用户写的其余参数）+ 指向 help。 */
+function unknownSubcommandText(argv) {
+  const [typed, ...rest] = argv
+  const guess = suggestSubcommand(typed)
+  const lines = [`没有「/memory ${typed}」这个子命令。`]
+  if (guess !== null) lines.push(`你是不是想输入 ${['/memory', guess, ...rest].filter(Boolean).join(' ')}？`)
+  lines.push('/memory help 查看全部子命令。')
+  return lines.join('\n')
+}
+
 /**
  * 执行 /memory 及其子命令。
  *
@@ -6853,68 +7320,67 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
     argv = forcedSub ? [forcedSub, ...parsed] : parsed
     memoryDir = memoryDirOf(ctx, { agent: invocation?.agent })
     if (!memoryDir) {
-      return { kind: 'error', text: '无法定位工作区记忆库：当前会话没有可用工作目录。' }
+      return { kind: 'error', text: '找不到当前会话的工作区：这个会话没有可用的工作目录。请在打开了工作区的会话里再用 /memory。' }
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    return { kind: 'error', text: `Could not resolve the memory root: ${detail}` }
+    return { kind: 'error', text: `找不到当前会话的工作区（${detail}）。请在打开了工作区的会话里再试；反复出现请重新启用插件。` }
   }
-  const sub = argv[0] ?? 'overview'
+  // 子命令不分大小写（id 等参数保持原样）
+  const sub = (argv[0] ?? 'overview').toLowerCase()
 
   try {
-    // 以下回执只给人看（斜杠命令的结果卡片），用面板上的叫法：项目记忆 / 通用记忆 / 全局指令 / 项目指令，
-    // 分类与来源也用 TYPE_LABELS / sourceLabel。库的英文键（project / global）只在要手打参数的地方留着。
     const libraries = librariesFor(memoryDir)
 
     if (sub === 'overview' || sub === '') {
-      const index = readIndexForInjection(memoryDir)
-      const vectors = loadVectors(memoryDir)
-      const embedder = await resolveEmbedder()
-      const limitText = CONFIG.maxMemoryCount > 0 ? `（上限 ${CONFIG.maxMemoryCount} 条）` : ''
-      const libraryLines = libraries.flatMap((library) => {
-        const items = listMemories(library.dir)
-        const byType = new Map()
-        for (const item of items) {
-          const type = item.meta.type ?? 'project'
-          byType.set(type, (byType.get(type) ?? 0) + 1)
-        }
-        const breakdown = MEMORY_TYPES.filter((type) => byType.has(type)).map((type) => `${TYPE_LABELS[type]} ${byType.get(type)}`)
-        return [
-          `${LIBRARY_LABELS[library.scope]}：${items.length} 条${limitText}${breakdown.length > 0 ? `  ${breakdown.join(' · ')}` : ''}`,
-          `  位置：${library.dir}`,
-          ...(library.scope === 'project'
-            ? [`  索引：${Buffer.byteLength(index, 'utf8')} 字节 / ${index ? index.split(/\r?\n/).length : 0} 行`]
-            : []),
-        ]
-      })
-      const lines = [
-        ...libraryLines,
-        `Agent 总结的记忆：${CONFIG.agentWrites === 'direct' ? '直接写入（agentWrites: direct）' : '先进待确认（agentWrites: review）'}`,
-        `检索：${embedder ? '向量 + 关键词（leanvec，256 维）' : '只用关键词（没有可用的 leanvec）'}`,
-        `向量：${vectors ? `${vectors.entries.length} 条` : '还没建立'}`,
-        '',
-        '子命令：/memory list | /memory pending | /memory accept <id> | /memory reject <id> | /memory extract | /memory forget <id> [project|global] | /memory reindex',
-        CONFIG.enableExtraction
-          ? '自动抽取：已开启（每 N 回合一次）；/memory extract 立刻跑一次。'
-          : '自动抽取：配置里未开启；/memory extract 仍可手动跑一次。',
-      ]
-      return { kind: 'success', text: lines.join('\n') }
+      return { kind: 'success', text: await overviewText(ctx, invocation, memoryDir) }
+    }
+
+    if (sub === 'status') {
+      return { kind: 'success', text: await statusText(ctx, invocation, memoryDir) }
+    }
+
+    if (sub === 'help') {
+      return { kind: 'success', text: helpText() }
     }
 
     if (sub === 'list') {
-      // 两个库分开列，每组标题带库名与条数；括号里的 project / global 是 /memory forget 要写的那个词
-      const groups = libraries.map((library) => ({ library, items: listMemories(library.dir) }))
+      // 两个库分开列，每组标题带库名与条数；括号里的 project / global 是 /memory forget 要写的那个词。
+      // 每条一行「id  [类型]  标题  更新于」，按更新时间倒序（与面板「记忆」页一致）；单库超过 LIST_SHOW_MAX 条只列最近的。
+      const groups = libraries.map((library) => ({
+        library,
+        items: listMemories(library.dir)
+          .map((item) => ({ item, updatedAt: memoryUpdatedAt(item) }))
+          .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
+      }))
       if (groups.every((group) => group.items.length === 0)) {
         const names = libraries.map((library) => LIBRARY_LABELS[library.scope])
-        return { kind: 'success', text: names.length > 1 ? `${names.join('和')}里都还没有记忆。` : `${names[0]}里还没有记忆。` }
+        return {
+          kind: 'success',
+          text:
+            `${names.length > 1 ? `${names.join('和')}里都还没有记忆` : `${names[0]}里还没有记忆`}。` +
+            '\n对话里让 Agent「记住」什么，或者 /memory extract 从这段对话里找找值得记的。',
+        }
       }
-      const lines = groups.flatMap(({ library, items }) => [
-        `${LIBRARY_LABELS[library.scope]}（${library.scope}）${items.length} 条：`,
-        ...items.map((item) => {
-          const title = item.meta.title || item.body.split(/\r?\n/)[0] || item.id
-          return `  ${item.id}  [${typeLabel(item.meta.type ?? 'project')}]  ${title}`
-        }),
-      ])
+      const now = Date.now()
+      const truncated = groups.some((group) => group.items.length > LIST_SHOW_MAX)
+      const lines = groups.flatMap(({ library, items }, i) => {
+        const name = `${LIBRARY_LABELS[library.scope]}（${library.scope}）`
+        if (items.length === 0) return [...(i > 0 ? [''] : []), `${name}：还没有记忆`]
+        const shown = items.slice(0, LIST_SHOW_MAX)
+        const rows = shown.map(({ item, updatedAt }) => [
+          item.id,
+          `[${typeLabel(item.meta.type ?? 'project')}]`,
+          clipDisplay(item.meta.title || item.body.split(/\r?\n/)[0] || item.id, LIST_TITLE_WIDTH),
+          updatedAt === null ? '' : relativeTimeZh(updatedAt, now),
+        ])
+        return [
+          ...(i > 0 ? [''] : []),
+          shown.length < items.length ? `${name}${items.length} 条，只列最近更新的 ${shown.length} 条：` : `${name}${items.length} 条：`,
+          ...alignColumns(rows, { indent: '  ' }),
+        ]
+      })
+      if (truncated) lines.push('', '全部条目在记忆面板「记忆」页查看：/memory_list')
       return { kind: 'success', text: lines.join('\n') }
     }
 
@@ -6940,14 +7406,16 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
         return {
           kind: 'success',
           text: CONFIG.enableExtraction
-            ? '待确认队列为空。抽取已开启（每 N 回合自动跑一次），也可以手动 /memory extract。'
-            : '待确认队列为空。自动抽取未开启（config 里 enableExtraction），可以用 /memory extract 手动跑一次。',
+            ? `没有待确认的内容。自动抽取已开（每 ${CONFIG.extractEveryTurns} 轮一次），也可以 /memory extract 立刻跑一次。`
+            : '没有待确认的内容。自动抽取没开；想从这段对话里找找值得记的，可以 /memory extract 跑一次。',
         }
       }
       // 每条标出收下后的去向（scope × load），以及来源：Agent 总结的要多看一眼。
-      // 写进全局指令的草稿按章标题定位（与 acceptPending 同口径），所以这里说「更新哪一章」而不报章号
+      // 写进全局指令的草稿按章标题定位（与 acceptPending 同口径），所以这里说「更新哪一章」而不报章号。
+      // 收下会删掉旧记忆的（supersedes）也写出来：面板卡片上同样会标「替换」「同时删除」。
       const destination = (meta) => {
         const { scope, load } = draftTarget(meta)
+        const supersedes = typeof meta.supersedes === 'string' ? meta.supersedes.trim() : ''
         if (load === 'always') {
           if (scope !== 'global') return `→ ${INSTRUCTION_LABELS.project}（应写进项目自己的 AGENTS.md，插件不收）`
           const chapterTitle = typeof meta.chapterTitle === 'string' ? meta.chapterTitle.trim() : ''
@@ -6958,27 +7426,42 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
             : chapterTitle
               ? `更新「${chapterTitle}」这一章`
               : `更新第 ${chapter} 章，但草稿没记章标题，收下会失败`
-          return `→ ${INSTRUCTION_LABELS.global}（${agentsFileDisplay()}，${action}）`
+          return `→ ${INSTRUCTION_LABELS.global} · ${action}${supersedes ? ` · 同时删除 ${supersedes}` : ''}`
         }
-        return `→ ${LIBRARY_LABELS[scope]}`
+        return `→ ${LIBRARY_LABELS[scope]}${supersedes ? ` · 替换 ${supersedes}` : ''}`
       }
-      const lines = drafts.map((item) => {
+      const lines = drafts.flatMap((item, i) => {
         const title = item.meta.title || item.body.split(/\r?\n/)[0] || item.id
-        const from = sourceLabel(item.meta)
-        return `${item.id}  [${typeLabel(item.meta.type ?? 'project')}]  ${title}  ${destination(item.meta)}${from}`
+        const number = `${i + 1}. `
+        const detail = [destination(item.meta), sourceLabel(item.meta).trim(), item.id].filter(Boolean).join(' · ')
+        return [`${number}[${typeLabel(item.meta.type ?? 'project')}] ${title}`, `${' '.repeat(number.length)}${detail}`]
       })
       return {
         kind: 'success',
-        text: [`待确认 ${drafts.length} 条：`, ...lines, '', '用 /memory accept <id> 收下，/memory reject <id> 丢弃'].join('\n'),
+        text: [
+          `待确认 ${drafts.length} 条：`,
+          '',
+          ...lines,
+          '',
+          '在面板「待确认」页逐条收下或丢弃更方便；也可以 /memory accept <id> / reject <id>',
+        ].join('\n'),
       }
     }
 
     if (sub === 'accept' || sub === 'reject') {
       const targetId = argv[1]
-      if (!targetId) return { kind: 'error', text: `用法：/memory ${sub} <id>` }
+      if (!targetId) {
+        return {
+          kind: 'error',
+          text: `用法：/memory ${sub} <id>。id 见 /memory pending；在面板「待确认」页点「${sub === 'accept' ? '收下' : '丢弃'}」更方便。`,
+        }
+      }
+      // 草稿 id 写错是最常见的失败：补一句去哪查（acceptPending / rejectPending 的原文还被 HTTP 路由用，不在那里改）
+      const draftError = (result) =>
+        result.reason === 'not-found' || result.reason === 'invalid-id' ? `${result.error}。用 /memory pending 查看现有草稿的 id。` : result.error
       if (sub === 'accept') {
         const result = await acceptPending(memoryDir, targetId)
-        if (!result.ok) return { kind: 'error', text: result.error }
+        if (!result.ok) return { kind: 'error', text: draftError(result) }
         // 常驻草稿收下后进的是 AGENTS.md，没有记忆文件也没有向量
         if (!result.file) {
           return {
@@ -7000,8 +7483,8 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
         }
       }
       const result = rejectPending(memoryDir, targetId)
-      if (!result.ok) return { kind: 'error', text: result.error }
-      return { kind: 'success', text: `已丢弃 ${targetId}` }
+      if (!result.ok) return { kind: 'error', text: draftError(result) }
+      return { kind: 'success', text: `已丢弃 ${targetId}（草稿直接删除，不留历史）` }
     }
 
     if (sub === 'extract') {
@@ -7017,7 +7500,7 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
             `但对话里没核对上，以「说是你的原话 · 没核对上」入队），去重丢弃 ${result.deduped} 条` +
             // 「不是记忆」的三类（流程 / 仓库规则 / 文档）跳过不入队；只在有时才说，免得每次多一句
             `${result.routed > 0 ? `，${result.routed} 条不是记忆（流程 / 仓库规则 / 文档）已跳过` : ''}。`,
-          result.queued > 0 ? '用 /memory pending 查看，/memory accept <id> 收下。' : '',
+          result.queued > 0 ? '用 /memory pending 查看，或在面板「待确认」页逐条收下或丢弃。' : '',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -7028,13 +7511,19 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
      * 删除一条已确认的记忆：`/memory forget <id> [project|global]`。
      *
      * 之前没有这个入口：`memory_forget` 工具只有模型能调，面板只能改不能删。
-     * 而直接入库的记忆记错了人却删不掉，闭环就是断的。删除会先留历史版本（deleteMemory 内部），可回退。
+     * 而直接入库的记忆记错了人却删不掉，闭环就是断的。删除前 deleteMemory 会留一份历史版本（historyLimit > 0 时），
+     * 但没有「恢复」入口：回执只说旧版留在哪、怎么手动拷回，不说「可回退」。
      * 两个库都找；同一个 id（或唯一前缀）两个库都命中时不猜，要求写明库。
      */
     if (sub === 'forget' || sub === 'delete') {
       const targetId = argv[1]
       if (!targetId) {
-        return { kind: 'error', text: `用法：/memory ${sub} <id> [project|global]（project = 项目记忆，global = 通用记忆；用 /memory list 查 id）` }
+        return {
+          kind: 'error',
+          text:
+            `用法：/memory ${sub} <id> [project|global]（project = 项目记忆，global = 通用记忆；id 用 /memory list 查）。` +
+            '在面板「记忆」页打开这条，「更多操作」里删除更方便。',
+        }
       }
       const wantedScope = argv[2] === 'project' || argv[2] === 'global' ? argv[2] : ''
       const searched = libraries.filter((library) => !wantedScope || library.scope === wantedScope)
@@ -7059,24 +7548,36 @@ async function executeMemoryCommand(ctx, invocation, forcedSub) {
         }
       }
       const { library, item: target } = matches[0]
+      const title = target.meta.title || target.body.split(/\r?\n/)[0] || target.id
+      // 留没留下历史版本以实际为准：historyLimit 为 0 时不留，留档失败也只是静默跳过（archiveVersion）。
+      // 比的是「最新一版的文件名」而不是份数：份数到了上限时，存一版删一版，份数不变
+      const newestVersion = () => listHistory(library.dir, target.id)[0]?.name ?? ''
+      const newestBefore = newestVersion()
       if (!deleteMemory(library.dir, target.id)) {
-        return { kind: 'error', text: `删除失败：${target.id} 不存在` }
+        return { kind: 'error', text: `删除失败：${target.id} 已经不在了。用 /memory list 看看现在有哪些。` }
       }
-      const built = await rebuildVectors(library.dir)
+      await rebuildVectors(library.dir)
+      const newestAfter = newestVersion()
+      const archived = newestAfter !== '' && newestAfter !== newestBefore
       return {
         kind: 'success',
-        text:
-          `已删除 ${target.id}（${LIBRARY_LABELS[library.scope]}；历史留档可回退；` +
-          `向量 ${built.mode}${Number.isFinite(built.indexed) ? `，${built.indexed} 条` : ''}）`,
+        text: [
+          `已删除「${title}」（${target.id}，${LIBRARY_LABELS[library.scope]}）。`,
+          archived
+            ? `旧版留在该库旁的 .memory-state/history/${target.id}/ 里；要恢复，把那里最新的文件拷回${LIBRARY_LABELS[library.scope]}的目录（位置见 /memory status）、改名为 ${target.id}.md，再 /memory reindex。`
+            : CONFIG.historyLimit > 0
+              ? '这次没能留下历史版本（写历史目录失败），删掉的内容找不回来了。'
+              : '配置里 historyLimit 为 0，没有留历史版本。',
+        ].join('\n'),
       }
     }
 
-    return {
-      kind: 'error',
-      text: `Unknown subcommand "${sub}". Use: /memory | /memory list | /memory pending | /memory accept <id> | /memory reject <id> | /memory extract | /memory forget <id> [project|global] | /memory reindex`,
-    }
+    return { kind: 'error', text: unknownSubcommandText(argv) }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    return { kind: 'error', text: `Memory command failed: ${detail}` }
+    return {
+      kind: 'error',
+      text: `/memory ${sub === 'overview' ? '' : sub}`.trimEnd() + ` 没有完成：${detail}\n可以再试一次；反复出现的话用 /memory status 看看两个库和配置是否正常。`,
+    }
   }
 }

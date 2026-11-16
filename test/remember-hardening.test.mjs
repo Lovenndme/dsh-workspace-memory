@@ -352,7 +352,7 @@ section('命令：全局草稿收下的提示、缺 rawInput 不抛、库满返�
     const noInvocation = await host.commands.get('memory').handler(undefined)
     check('invocation 整个是 undefined 也不抛', noInvocation.kind === 'error', JSON.stringify(noInvocation))
     const overview = await host.command('memory', '')
-    check('空输入 = 总览', overview.kind === 'success' && /项目记忆：0 条/.test(overview.text), overview.text)
+    check('空输入 = 总览', overview.kind === 'success' && overview.text.startsWith('记忆总览') && /^  项目记忆  还没有记忆$/m.test(overview.text), overview.text)
 
     writePending(host.memoryDir, { title: 'Global rule', body: 'rule body', scope: 'global', slug: 'g' })
     const gid = listPending(host.memoryDir)[0].id

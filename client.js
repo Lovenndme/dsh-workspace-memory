@@ -118,6 +118,37 @@ window.__ModuleLoader__.load({
       'time.updated': '{when}更新',
       'time.none': '—',
 
+      'action.handleInPanel': '去面板处理',
+      'pick.search': '筛选 /memory 子命令',
+      'pick.empty': '没有可用的子命令',
+      'pick.noResults': '没有匹配的子命令',
+      'pick.group.common': '常用',
+      'pick.group.id': '需要 id 的操作（在面板里点按钮更方便）',
+      'pick.group.tidy': '整理',
+      'pick.overview': '总览',
+      'pick.overview.detail': '/memory — 待确认、每轮带上的指令、项目记忆与通用记忆',
+      'pick.pending': '待确认',
+      'pick.pending.detail': '/memory pending — 列出等你确认的草稿',
+      'pick.extract': '抽取',
+      'pick.extract.detail': '/memory extract — 立刻从这段对话里找值得记的，结果进待确认',
+      'pick.list': '全部记忆',
+      'pick.list.detail': '/memory list — 列出项目记忆与通用记忆里的全部条目',
+      'pick.status': '状态',
+      'pick.status.detail': '/memory status — 库的位置、索引、向量与配置问题',
+      'pick.accept': '收下草稿',
+      'pick.accept.detail': '/memory accept <id> — 选这项打开面板，在「待确认」页点「收下」',
+      'pick.reject': '丢弃草稿',
+      'pick.reject.detail': '/memory reject <id> — 选这项打开面板，在「待确认」页点「丢弃」',
+      'pick.forget': '删除记忆',
+      'pick.forget.detail': '/memory forget <id> — 选这项打开面板，在「记忆」页打开这条，从「更多操作」删除',
+      'pick.reindex': '重建索引',
+      'pick.reindex.detail': '/memory reindex — 手改过记忆文件后用',
+      'pick.help': '全部子命令',
+      'pick.help.detail': '/memory help — 每个子命令一行说明',
+      'pick.noSession': '这个会话还没准备好，稍后再试',
+      'pick.failed': '没能执行 {line}：{reason}',
+      'pick.unmatched': '宿主没有这个命令，插件可能还没启用',
+
       'unit.kb': '{n} KB',
       'unit.tokens': '约 {n} tokens',
       'unit.chapters': '章',
@@ -596,6 +627,37 @@ window.__ModuleLoader__.load({
       'time.dateYear': '{y}/{m}/{d} {hm}',
       'time.updated': 'updated {when}',
       'time.none': '—',
+
+      'action.handleInPanel': 'Handle in panel',
+      'pick.search': 'Filter /memory subcommands',
+      'pick.empty': 'No subcommands available',
+      'pick.noResults': 'No matching subcommand',
+      'pick.group.common': 'Common',
+      'pick.group.id': 'Need an id (easier with the panel buttons)',
+      'pick.group.tidy': 'Maintenance',
+      'pick.overview': 'Overview',
+      'pick.overview.detail': '/memory — items to review, per-turn instructions, both memory libraries',
+      'pick.pending': 'Review',
+      'pick.pending.detail': '/memory pending — list the drafts waiting for your review',
+      'pick.extract': 'Extract',
+      'pick.extract.detail': '/memory extract — look for things worth keeping in this conversation now; results go to Review',
+      'pick.list': 'All memories',
+      'pick.list.detail': '/memory list — list the memories in both libraries',
+      'pick.status': 'Status',
+      'pick.status.detail': '/memory status — library locations, index, vectors and config problems',
+      'pick.accept': 'Accept a draft',
+      'pick.accept.detail': '/memory accept <id> — opens the panel; click Accept on the Review page',
+      'pick.reject': 'Discard a draft',
+      'pick.reject.detail': '/memory reject <id> — opens the panel; click Discard on the Review page',
+      'pick.forget': 'Delete a memory',
+      'pick.forget.detail': '/memory forget <id> — opens the panel; open the memory on the Memories page and delete it from More actions',
+      'pick.reindex': 'Rebuild index',
+      'pick.reindex.detail': '/memory reindex — after editing memory files by hand',
+      'pick.help': 'All subcommands',
+      'pick.help.detail': '/memory help — one line per subcommand',
+      'pick.noSession': 'This session is not ready yet; try again in a moment',
+      'pick.failed': 'Could not run {line}: {reason}',
+      'pick.unmatched': 'the host has no such command; the plugin may not be enabled yet',
 
       'unit.kb': '{n} KB',
       'unit.tokens': '≈ {n} tokens',
@@ -6394,12 +6456,107 @@ window.__ModuleLoader__.load({
     }
     const COMMAND_TITLE = { color: COLORS.text2, fontSize: '12px', margin: '0 0 4px 4px', fontFamily: MONO }
 
+    /** 命令节点 → 子命令：`/memory pending` 的 args 是 ' pending'（宿主 CommandNode.args 原样保留空白），`/memory_pending` 看命令名。 */
+    function commandSub(node) {
+      const name = String(node?.name ?? '')
+      if (name.startsWith('memory_')) return name.slice('memory_'.length)
+      return (String(node?.args ?? '').trim().split(/\s+/)[0] || '').toLowerCase()
+    }
+
+    /**
+     * /memory、/memory_extract、/memory_pending 的结果卡（2026-11-15）：保留等宽文本（回执按显示宽度对齐过），
+     * 下面加一个按钮打开记忆面板；待确认的卡写「去面板处理」——逐条收下 / 丢弃在面板的「待确认」页做。
+     * 标题带上子命令（CommandNode.args），否则 /memory list 与 /memory status 的卡看起来都叫 /memory。
+     */
     function MemoryCommandCard({ node }) {
       const outcome = node?.outcome ?? null
-      const title = h0('div', { style: COMMAND_TITLE }, `/${node?.name ?? 'memory'}`)
+      const args = typeof node?.args === 'string' ? node.args.trim() : ''
+      const title = h0('div', { style: COMMAND_TITLE }, `/${node?.name ?? 'memory'}${args ? ` ${args}` : ''}`)
       if (outcome === null) return h0('div', null, title, h0('pre', { style: { ...REPORT_STYLE, color: COLORS.text2 } }, '…'))
       const style = outcome.kind === 'error' ? { ...REPORT_STYLE, color: COLORS.error } : REPORT_STYLE
-      return h0('div', null, title, h0('pre', { style }, outcome.text ?? ''))
+      const label = commandSub(node) === 'pending' ? t('action.handleInPanel') : t('action.openPanel')
+      return h0(
+        'div',
+        null,
+        title,
+        h0('pre', { style }, outcome.text ?? ''),
+        h0('div', { style: { marginTop: '6px' } }, h0('button', { type: 'button', style: BUTTON, onClick: () => openMemoryPanel(cardContext) }, label)),
+      )
+    }
+
+    /* ------------------------------------------- /memory 的子命令选单 */
+
+    /**
+     * 只敲 `/memory`（从补全菜单选中，或直接回车）时弹出的子命令选单，用的是 DSH 客户端的
+     * `commandUi.decorate`（dsh-client-ui-commands 的 CommandDecoration：给宿主命令的「裸调用」挂一个 popupSelect，
+     * 宿主命令的目录行、参数认领、`/memory list` 这类带参数的输入都不受影响；/feedback、/permission 是同一用法）。
+     * 宿主命令接口本身没有参数候选，hint 只能是一行占位文字，所以可点选的列表只能在这里做。
+     * 选中后经会话的 `session.command('/memory …')` 执行，结果照常落成命令卡。总览排第一并标 active：
+     * 回车两下 = 以前回车一下的总览。需要 id 的三项不在这里执行，打开面板去点按钮。
+     * 旧版 DSH 没有 commandUi（或没有 decorate）时什么都不做，`/memory` 回车照旧直接出总览。
+     */
+    const PICKER_ROWS = [
+      { id: 'overview', group: 'common', line: '/memory' },
+      { id: 'pending', group: 'common', line: '/memory pending' },
+      { id: 'extract', group: 'common', line: '/memory extract' },
+      { id: 'list', group: 'common', line: '/memory list' },
+      { id: 'status', group: 'common', line: '/memory status' },
+      { id: 'accept', group: 'id', panel: true },
+      { id: 'reject', group: 'id', panel: true },
+      { id: 'forget', group: 'id', panel: true },
+      { id: 'reindex', group: 'tidy', line: '/memory reindex' },
+      { id: 'help', group: 'tidy', line: '/memory help' },
+    ]
+
+    /** 选单的行（每次打开时取文案，切换界面语言后下次打开就是新语言）。 */
+    function pickerOptions() {
+      return PICKER_ROWS.map((row) => ({
+        id: row.id,
+        label: t('pick.' + row.id),
+        detail: t('pick.' + row.id + '.detail'),
+        group: { name: row.group, label: t('pick.group.' + row.group) },
+        ...(row.id === 'overview' ? { active: true } : {}),
+      }))
+    }
+
+    function registerMemoryPicker(ctx) {
+      if (typeof ctx?.inject !== 'function') return
+      try {
+        ctx.inject(['commandUi', 'sessions'], (scope) => {
+          const commandUi = scope.commandUi ?? scope.get?.('commandUi')
+          if (!commandUi || typeof commandUi.decorate !== 'function') return
+          const run = async (option, session) => {
+            const row = PICKER_ROWS.find((r) => r.id === option?.id)
+            if (!row) return
+            if (row.panel) {
+              openMemoryPanel(cardContext)
+              return
+            }
+            const sessions = scope.get?.('sessions') ?? scope.sessions
+            const live = sessions?.binding?.(session?.sessionId)?.session
+            if (!live || typeof live.command !== 'function') throw new Error(t('pick.noSession'))
+            const result = await live.command(row.line)
+            if (!result?.ok) throw new Error(t('pick.failed', { line: row.line, reason: result?.error?.message ?? '' }))
+            if (!result.value?.matched) throw new Error(t('pick.failed', { line: row.line, reason: t('pick.unmatched') }))
+          }
+          scope.effect(
+            () =>
+              commandUi.decorate({
+                name: 'memory',
+                available: () => true,
+                ui: {
+                  kind: 'popupSelect',
+                  searchLabels: () => ({ placeholder: t('pick.search'), empty: t('pick.empty'), noResults: t('pick.noResults') }),
+                  options: async () => pickerOptions(),
+                  onSelect: run,
+                },
+              }),
+            'dsh-workspace-memory: /memory picker',
+          )
+        })
+      } catch (error) {
+        console.error('[workspace-memory] /memory 子命令选单注册失败', error)
+      }
     }
 
     /* --------------------------------------------- 命令卡：/memory_list */
@@ -6563,6 +6720,9 @@ window.__ModuleLoader__.load({
           document.head.appendChild(el)
           return () => el.remove()
         })
+
+        // 只敲 /memory 时弹出的子命令选单（commandUi.decorate；旧版 DSH 没有就跳过）
+        registerMemoryPicker(ctx)
 
         try {
           const locale = ctx.get('locale')

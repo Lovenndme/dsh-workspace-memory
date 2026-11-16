@@ -90,7 +90,7 @@ node scripts/reindex.mjs                                  # 手改记忆文件�
 - **测试文件的第一个 import 必须是 `test/isolate-home.mjs`**：它把 `DSH_HOME` 指到本文件独占的临时目录（所有主目录路径都经 `dshHome()`，每次调用重读环境变量），退出时恢复并清理。漏了它，没传 `globalMemoryDir` 的测试会落到真实主目录——审查在模拟的真实主目录下复现过测试搬走全局库里的条目。新增测试文件时别忘了；目前只有只读 `client.js`、不加载 `index.js` 的 `client-logic.test.mjs` 例外。
 - **新增配置键**：加进 `DEFAULT_CONFIG` 还不够，必须同时进 `STRING_KEYS`（固定取值的再进 `STRING_CHOICES`）/ `PATH_KEYS` / `BOOLEAN_KEYS` / `NUMERIC_RULES` 之一，否则被静默忽略；坏值也会静默回落默认值，所以数值下限要容得下测试用值，并补一条「设置后读出来」的断言。删掉的键挪进 `DEPRECATED_KEYS`，否则用户配置里的旧键只会得到一句「未知配置项」。
 - **工具返回值不能含 `undefined` / `NaN` / `Infinity`**：宿主报 `value is not lossless JSON`，但副作用已经发生，调用方重试会造成重复写入。用条件展开 `...(x ? { x } : {})`。
-- **无参命令不要声明 `input`**：`input: { hint: '' }` 会让整个插件激活失败。DSH 没有子命令补全，所以无参子命令拆成独立命令（`memory_extract` / `memory_pending` / `memory_list`），带 id 的仍走 `/memory <sub> <id>`。
+- **无参命令不要声明 `input`**：`input: { hint: '' }` 会让整个插件激活失败。DSH 没有子命令补全，所以无参子命令拆成独立命令（`memory_extract` / `memory_pending` / `memory_list`），带 id 的仍走 `/memory <sub> <id>`。可点选的子命令列表只能在客户端做：`commandUi.decorate` 给「只敲 `/memory`」挂选单（client.js `registerMemoryPicker`，HANDOFF 第二十八节）。命令回执只给人看；给模型看的文字由 `test/model-visible-text.test.mjs` 按基线逐字守着。
 - **不要在 profile 里跑 `pnpm install` / `pnpm remove`**，除非用户确认：插件是 link 安装，pnpm 会剪掉 link 目标的依赖，`pnpm remove` 还会删掉 link 目标本身。
 - **link 安装解析不到宿主的 `zod` / `@deepseek-ai/schemastery` / storage-domain**，所以没有 `export const Config`，不用 DSH storage，也不用 `ctx.sessionProjections`；别引入需要它们的写法。
 - **提示词要分层，同一条规则只出现一处**（官方 tool-design.md）：行为指引走 `ctx.systemPrompt.section`（`MEMORY_SECTION`），参数规则写在参数上（`TYPE_RULES` 等常量，抽取提示词复用同一批），工具说明只写做什么、何时用、返回什么。改措辞时动的是常量；`test/admission.test.mjs` 守的是结构（哪段在哪、各出现一次、长度上限），不守句子。把规则塞回工具说明会让测试失败，也会让工具与抽取两套口径重新各自漂移。

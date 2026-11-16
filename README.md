@@ -99,7 +99,7 @@ plugin_manager set_plugin --target include:dsh-workspace-memory --enabled true
 node scripts/install-deps.mjs   # 约 85 MB，装到 ~/.dsh/dsh-workspace-memory-deps
 ```
 
-装完再禁用、启用一次插件。`memory_status` 会显示当前是 `hybrid`（向量加关键词）还是 `keyword`（纯关键词）。
+装完再禁用、启用一次插件。`/memory status` 的「检索」一行会显示当前是向量加关键词，还是只用关键词。
 
 ## 平时怎么用
 
@@ -123,18 +123,33 @@ node scripts/install-deps.mjs   # 约 85 MB，装到 ~/.dsh/dsh-workspace-memory
 
 ### 命令
 
+只敲 `/memory`（从补全菜单选中或直接回车）会弹出子命令选单，点一下就执行；第一项是总览，所以回车两下就是总览。
+敲 `/memory ` 加空格后，输入框里提示最常用的几个：`pending 待确认 · extract 抽取 · list 全部 · help 更多`。
+
 ```text
-/memory                      概览：记忆条数、检索模式、助手总结的记忆怎么处理
-/memory list                 列出全部记忆
-/memory pending              列出待确认草稿（也可以用 /memory_pending）
-/memory accept <id>          收下一条草稿
-/memory reject <id>          丢弃一条草稿
-/memory forget <id> [project|global]
-                             删除一条记忆（两个库都有同一个 id 时要写明是哪个）
+常用
+/memory                      总览：待确认几条、每轮都读的全局指令与项目指令（大小与上限）、
+                             用到才查的通用记忆与项目记忆（条数与分类）、每轮固定开销约多少 tokens
+/memory pending              列出待确认草稿，每条写明收下后去哪、来源（也可以用 /memory_pending）
 /memory extract              立刻从当前对话里抽取一次候选，结果进待确认（也可以用 /memory_extract）
+/memory list                 列出两个库的记忆和更新时间（每个库最多列最近 30 条，全部在面板里看）
+/memory status               诊断：两个库的位置、索引、向量、自动抽取开关、配置问题
+
+需要 id 的操作（在面板里点按钮更方便）
+/memory accept <id>          收下一条草稿（面板「待确认」页的「收下」）
+/memory reject <id>          丢弃一条草稿，不留历史（面板「待确认」页的「丢弃」）
+/memory forget <id> [project|global]
+                             删除一条记忆，删前在该库旁的 .memory-state/history/ 留一份旧版
+                             （两个库都有同一个 id 时要写明是哪个）
+
+整理
 /memory reindex              手改过记忆文件后，重建索引
+/memory help                 每个子命令一行说明；打错子命令时会提示「你是不是想输入 …」
 /memory_list                 在右侧栏打开记忆面板
 ```
+
+命令结果卡片下面有「打开记忆面板」按钮（待确认的卡片上是「去面板处理」）。子命令选单用的是 DSH 客户端的命令选单接口
+（0.2.2 版本里有）；没有这个接口的版本里 `/memory` 回车直接出总览，其余用法相同。
 
 ### 模型用的工具
 

@@ -201,7 +201,7 @@ section('收下草稿：按 scope + load 落地；旧草稿兼容')
     // /memory pending 标出去向
     writePending(host.memoryDir, { id: 'dr_show', title: '展示用', body: 'x', scope: 'global', load: 'on-demand', source: 'agent' })
     const pending = await host.command('memory', 'pending')
-    check('/memory pending 标出去向与来源（面板的叫法：通用记忆 / 项目指令 / Agent 总结）', /dr_show .*→ 通用记忆  Agent 总结$/m.test(pending.text) && /dr_bad .*→ 项目指令（/.test(pending.text), pending.text)
+    check('/memory pending 标出去向与来源（面板的叫法：通用记忆 / 项目指令 / Agent 总结）', /→ 通用记忆 · Agent 总结 · dr_show$/m.test(pending.text) && /→ 项目指令（.* · dr_bad$/m.test(pending.text), pending.text)
     const accepted = await host.command('memory', 'accept dr_show')
     check('/memory accept 说明落到了哪个库', accepted.kind === 'success' && /→ 通用记忆 /.test(accepted.text), accepted.text)
   } finally {

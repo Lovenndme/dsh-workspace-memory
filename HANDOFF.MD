@@ -1336,3 +1336,24 @@ cron `0 */4 * * *` + `workflow_dispatch`（含 dry_run）→ tag 门禁 → patc
 不主动动它，等下次要统一来源时再按那条流程做。
 
 **副作用**：这次 HANDOFF 提交会被下一次 4 小时批量发成 0.8.3（任何提交都会触发一次 patch 发布，这是设计如此）。
+
+## 二十八、/memory 命令优化（2026-11-15）
+
+只改给人看的部分：输入提示、命令回执、命令结果卡片。给模型看的文字一字未改（见下「守卫」）。
+
+**核实到的 DSH 命令接口**（安装包 0.2.2-rc.3 的 app.asar）：
+- 宿主侧 `ctx.commands.register` 的 `input` 只有 `hint` 与 `attachments`（`@deepseek-ai/dsh/docs/subsystems/commands.md`「输入元数据」`CommandInputDescriptor`），**没有参数候选**；hint 只在敲 `/memory ` 之后作为输入框占位出现（`dsh-client-ui-commands/src/client/service.ts` 的 `leadingClaim`），菜单行不显示它（`dsh-client-ui-input-trigger/src/client/MenuView.tsx` 不渲染 hint）。
+- 客户端另有 `ctx.commandUi.decorate({ name, available, ui })`（`dsh-client-ui-commands/src/client/contract.ts` 的 `CommandDecoration`）：给**宿主命令的裸调用**（菜单选中或只敲命令名回车）挂一个 popupSelect / action，带参数的输入仍走宿主命令（`service.ts` 的 `dispatch` / `matchEnter`）。官方 `/feedback`（`dsh-client-ui-message-feedback`）与 `/permission`（`dsh-client-ui-permission-presets`，选中后 `session.command('/permission …')`）就是这个用法。
+
+**做了什么**：
+- 输入提示改成 `pending 待确认 · extract 抽取 · list 全部 · help 更多`（accept / reject / forget / reindex / status 照常可用，收进 help）；命令描述改成一句中文。
+- 客户端 `registerMemoryPicker`：只敲 `/memory` 弹出子命令选单，三组（常用：总览、pending、extract、list、status；需要 id：accept、reject、forget——选中打开面板；整理：reindex、help）。总览标 active，回车两下 = 以前回车一下。选中经 `sessions.binding(id).session.command(line)` 执行，结果照常落成命令卡。没有 `ctx.inject` / `commandUi.decorate` 的旧版 DSH 什么都不做。
+- `/memory` 总览按面板记忆地图重排（待确认 → 每轮都读 → 用到才查 → 每轮固定开销 → 检索 / 写入一句话），不出现本机路径、配置键名、向量维度；诊断细节移到新增的 `/memory status`；新增 `/memory help` 与未知子命令的「你是不是想输入」（前缀、编辑距离、照着提示打的中文）。`pending` 每条两行，`list` 带相对时间、单库最多 30 条，`forget` 改说旧版在 `.memory-state/history/<id>/` 与怎么手动拷回（以前写「可回退」，但没有恢复入口）。错误回执全部中文并给下一步。对齐按显示宽度（中文 2 格）。
+- 每轮固定开销与面板一致：面板（`costParts`）算的是全局指令 + 项目指令**团队与仅你** + 索引估算，宿主 `perTurnCost` 照抄同一算法。
+- 命令卡 `MemoryCommandCard`：标题带子命令，文本下加「打开记忆面板」按钮，`/memory pending` 与 `/memory_pending` 的卡写「去面板处理」（只打开面板，不能直接跳到「待确认」页：面板没有对外的切页入口）。
+
+**守卫**：
+- `test/model-visible-text.test.mjs`：系统提示段全文、四个工具的 description / 参数 / output schema、MEMORY.md 索引格式、每轮注入的索引上下文，与 `test/fixtures/model-visible-text.json`（由 e16ba87 生成）逐项比对；不一致就失败并提示「改了模型可见文字要重跑评测」。真要改时先跑评测，再 `node test/model-visible-text.test.mjs --update`。
+- `test/memory-command.test.mjs`：总览各状态、status、help、建议、pending / list / forget 文案、显示宽度对齐、不含本机路径；把宿主路由的真实响应喂给 client.js 的 `normalizeAgents` / `normalizeProject` / `costParts` / `tokensOf`，与总览的 tokens 对拍；`relativeTimeZh` 与面板 `relTime` 对拍；用假 ctx 跑 client 的 `apply`，检查命令卡按钮与 decorate 的注册、选中行为、旧版降级。
+
+**还没验证**：没在真实 DSH 里跑过。重载后确认 `application` 为 `applied`、无 diagnostic，再试：只敲 `/memory` 是否弹出选单、回车两下是否出总览、`/memory ` 加空格时输入框提示、选中「收下草稿」是否打开面板、命令卡按钮。

@@ -66,7 +66,7 @@
 | D | `POST /promote` | 项目库条目不再返回 `scope-not-global`，与通用记忆走同一逻辑：追加新章 → 成功后归档并删除来源条目；响应加 `fromScope`。写章失败来源不动；删除来源失败返回 `ok:true, memoryRemoved:false, removeError` |
 | E | `POST /open-agents` | 可选 `target:'global'|'team'|'local'`（缺省 global，行为不变）；team / local 需要 session，与 A 同一套校验；文件不存在 400 `file-missing`；非字符串或未知 target 400 `invalid-target` |
 | F | `POST /agents/create`（新增） | 全局 AGENTS.md 不存在时独占创建，内容一行 `# AGENTS.md`；任何已有目录项（含悬空链接）返回 409 `already-exists` |
-| G | 斜杠命令输出 | `/memory`、`list`、`pending`、`accept`、`forget`、`reindex`、`extract`、`/memory_list` 的回执与 `/memory_list` 的命令描述统一用 §2 的叫法；两库分开计数 |
+| G | 斜杠命令输出 | `/memory`、`list`、`pending`、`accept`、`forget`、`reindex`、`extract`、`/memory_list` 的回执与 `/memory_list` 的命令描述统一用 §2 的叫法；两库分开计数。2026-11-15 第二轮（HANDOFF 第二十八节）：`/memory` 总览按 §3 记忆地图排——第一行「记忆总览 · 工作区名」，接着待确认，再「每轮都读」（全局指令 N 章 · 已用 / 上限 KB；项目指令 团队 / 仅你）与「用到才查」（通用记忆、项目记忆：条数 / 上限 + 按类型计数），「每轮固定开销约 N tokens」与总览页同一算法（全局指令 + 团队 + 仅你 + 索引估算，字节 ÷ 3.5；测试拿两边对拍），不出现本机路径与配置键名；诊断细节移到新增的 `/memory status`；新增 `/memory help`（常用 / 需要 id / 整理三组）与未知子命令的「你是不是想输入」；`pending` 每条两行（`N. [类型] 标题` + `→ 去向 · 来源 · id`）；`list` 带相对更新时间、单库最多 30 条；`forget` 只说旧版留在 `.memory-state/history/<id>/`。输入提示 `pending 待确认 · extract 抽取 · list 全部 · help 更多`；只敲 `/memory` 时客户端弹子命令选单（`commandUi.decorate`）；命令卡下加「打开记忆面板」/「去面板处理」按钮 |
 
 新原因码：`file-missing`（400）、`already-exists`（409）、`invalid-target`（400，经 RequestError）。客户端按原因码处理，不看状态码。
 

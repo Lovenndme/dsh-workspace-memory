@@ -1,0 +1,455 @@
+{
+  "sections": [
+    {
+      "name": "workspace-memory",
+      "order": 3200,
+      "interpolate": false,
+      "text": "# 记忆与知识沉淀\n\n学到以后还用得上的东西时，先判断它该写到哪：\n- 可重复的多步操作流程（怎么部署、怎么排查某类故障、怎么出报表）→ skill，不管是只有你用还是大家都用\n- 必须遵守的规则以 AGENTS.md 为准：进这个仓库的人和 agent 都要遵守的 → 项目的 AGENTS.md；只对这位用户成立的项目规则 → 同目录的 AGENTS.local.md。决定仓库里会留下什么的约定（提交说明、代码风格、命名）也算这个仓库的规则。规则不往记忆里存第二份\n- 用户是谁、用户对你做事和表达方式的长期要求，在所有项目都成立的 → 全局 AGENTS.md：调用 memory_remember，scope 选 global、load 选 always，它会进待确认，由用户在面板里收下\n- 项目说明、用法、设计取舍 → README 或仓库文档\n- 其余只有你和这位用户用得上的：代码里看不出的进行中决定与期限、仓库外资源的位置、你验证过的坑 → 记忆（memory_remember）\n代码、git 历史、现有文档里已经有的，哪里都不用写。\n\n用户说「以后 / 每次 / 记住 / 默认」只说明这件事要长期保留，去处仍按上面判断；话里明确说了「这次」的，只管这一次，不记。用户指出你的做法或表达不对时，哪怕只说一次、没说「以后」，也要做两件事：当场改正，并把这条做法写下来。只在回复里答应「以后会注意」没有用：下次会话你不记得这次对话，写下来才算数。没有调用 memory_remember 并拿到返回之前，不要对用户说「记下了」；决定先问用户写到哪时，就说明还没记。用户只是指出这次的结果不对（算错了、写错了），改对就行，不要自己归纳出一条做法去记。\n\nskill、AGENTS.md、README 是共享文件：先说明想写什么、为什么，用户同意后再用文件工具写；用户明确要求时直接写。等用户答复期间不要先往记忆里存一份，否则同一条内容会有两个出处。拿不准去处，或者拿不准是长期规则还是只管这一次，就在回复末尾问用户一句并给出选项；没有具体要记的东西时，不要泛泛地问要不要记点什么。你自己踩到并验证过的坑不用先问，直接存：它会进待确认，由用户决定收不收。只为当前任务服务的指令、进度、中途结论不记。\n\n记忆写的是当时的情况。照着记忆里提到的文件、命令、配置去做之前，先确认它们还在。"
+    }
+  ],
+  "tools": [
+    {
+      "name": "memory_forget",
+      "description": "Delete one memory by id when it is outdated or wrong. Returns whether it was removed and from which library.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Exact memory id from MEMORY.md or memory_recall."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "global"
+            ],
+            "description": "Which library: 'project' = this workspace, 'global' = the all-projects on-demand library. Optional unless the id is in both."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "indexStale": {
+            "type": "boolean"
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "scope": {
+                  "type": "string"
+                },
+                "file": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "memory_recall",
+      "description": "Search saved memories in this workspace's library and the all-projects library, and return the closest matches with full bodies, file paths, scope and the date each was last updated. An empty result means nothing relevant is recorded.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "What you are trying to remember, or an exact memory id."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Max results, 1..20. Default 5."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "title": {
+                  "description": "Copied from the memory file; a hand-edited file may hold any JSON value here."
+                },
+                "type": {
+                  "description": "Copied from the memory file; a hand-edited file may hold any JSON value here."
+                },
+                "tags": {
+                  "description": "Copied from the memory file; a hand-edited file may hold any JSON value here."
+                },
+                "score": {
+                  "type": "number"
+                },
+                "vector": {
+                  "type": "number"
+                },
+                "keyword": {
+                  "type": "number"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "chars": {
+                  "type": "number"
+                },
+                "file": {
+                  "type": "string"
+                },
+                "updated": {
+                  "type": "string",
+                  "description": "ISO date (YYYY-MM-DD) the memory was last modified, else created."
+                },
+                "ageDays": {
+                  "type": "integer",
+                  "description": "Whole days between that date and today."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "memory_remember",
+      "description": "Save one memory for future sessions. Say what kind of thing it is with type: memories are saved; for a procedure, a repo-wide rule or project documentation the tool tells you where it belongs instead. Worth saving: what stays true and useful in a later session and would change what you do next time. Not worth saving: instructions, progress or results of the current task; what the diff or docs already show; your opinion of the user; generic advice; secrets or tokens. Save at once on an explicit ask or a correction; anything else at the end of the task, because mid-task conclusions get overturned. To change or correct a memory that already exists, pass supersedes instead of saving a second one. Returns the saved id, a pending id when the memory waits for the user's review, or a refusal that says what to change.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "Short English kebab-case file name: lowercase ASCII words joined by hyphens, e.g. \"no-explanatory-text-in-ui\"."
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable title (may be Chinese). Not the file name."
+          },
+          "description": {
+            "type": "string",
+            "description": "One line (<=120 chars), shown in the index on every turn. State the memory itself (for a rule, the rule), in the user's language."
+          },
+          "body": {
+            "type": "string",
+            "description": "The memory in Markdown: the rule in a sentence or two, then a \"Why:\" line and a \"How to apply:\" line. Write what the user asked for, not the mechanism you chose to implement it. Leave out what is stale next week: commit hashes, counts, version numbers, backup or install paths (a version is fine as a pitfall's expiry condition)."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "feedback",
+              "project",
+              "reference",
+              "pitfall",
+              "procedure",
+              "repo-rule",
+              "docs"
+            ],
+            "description": "Says what kind of thing this is and sets the bar. Five kinds are memories. user: who the user is (language, role, expertise, standing preferences); only what they said themselves, never your impression of them. feedback: the user corrected HOW you work or communicate, or confirmed a non-obvious approach; save it the first time, do not wait for a repeat; correcting this task's output (a wrong value, a typo) is not feedback, even if you could draw a lesson from it. project: a goal, decision, constraint or deadline in this user's work on the project that the code cannot show, stated by the user; absolute dates; not your own plan or progress, and not a standing rule for the repo (that is repo-rule). reference: where something lives outside the repo (URL, dashboard, account, doc) and what it is for. pitfall: something non-obvious you hit and VERIFIED, a trap and its fix or the one technique that works; name the situation that triggers it and when it stops applying (e.g. a version); a guess or mid-task theory is not a pitfall. Three kinds are not memories: choose them when they fit, and instead of saving, the tool tells you where the content belongs. procedure: a repeatable multi-step how-to. repo-rule: a rule everyone working on this repo must follow. docs: what the project is, how to use it, or why it is built this way."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "user",
+              "agent"
+            ],
+            "description": "\"user\" = the user said it; give their words in evidence. \"agent\" = you worked it out yourself, as with most pitfalls; it waits for the user's review."
+          },
+          "evidence": {
+            "type": "string",
+            "description": "The user's exact words that state this memory, copied from their message. Needed when source is \"user\": when they are found in the conversation the memory is saved directly."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Real files this memory is about (e.g. \"src/index.js\"). The memory surfaces when those files are touched; a wrong path means it never does."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "global"
+            ],
+            "description": "\"global\" = holds in any project: who the user is, how they want you to work or communicate. \"project\" = holds only in this workspace: its decisions, deadlines, resources, pitfalls. When unsure choose \"project\"."
+          },
+          "load": {
+            "type": "string",
+            "enum": [
+              "on-demand",
+              "always"
+            ],
+            "description": "\"always\" = a chapter in the user's global instructions file (AGENTS.md), injected into every turn of every project; it always waits for the user's review. Use it for the user's standing requirements about how you work or communicate that hold in every project, and for a trap whose damage cannot be undone. Needs scope \"global\". \"on-demand\" (default) = the index line is visible every turn and the body surfaces through recall; use it for everything else."
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "Id of the memory this one replaces; the old body is archived."
+          },
+          "newMemory": {
+            "type": "boolean",
+            "description": "Only with load \"on-demand\". Set true to confirm this is a separate memory after a refusal listed similar ones."
+          },
+          "chapter": {
+            "type": "number",
+            "description": "Only with load \"always\". The 1-based AGENTS.md chapter to overwrite with this content; merge old and new into body yourself."
+          },
+          "newChapter": {
+            "type": "boolean",
+            "description": "Only with load \"always\". Set true to confirm this is a new topic, not an existing chapter under another title."
+          }
+        },
+        "required": [
+          "slug",
+          "title",
+          "body",
+          "type",
+          "source",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "What happened, in words for the model."
+          },
+          "id": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "load": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "written": {
+            "type": "boolean"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "string"
+          },
+          "replacedDraft": {
+            "type": "string"
+          },
+          "replaced": {
+            "type": "string"
+          },
+          "replacedFrom": {
+            "type": "string"
+          },
+          "home": {
+            "type": "string",
+            "enum": [
+              "skill",
+              "agents",
+              "readme"
+            ]
+          },
+          "keptAsMemory": {
+            "type": "boolean"
+          },
+          "loadForced": {
+            "type": "boolean"
+          },
+          "updated": {
+            "type": "boolean"
+          },
+          "chars": {
+            "type": "number"
+          },
+          "count": {
+            "type": "number"
+          },
+          "limit": {
+            "type": "number"
+          },
+          "staleValues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pathWarnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "clearedDrafts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "chapter": {
+            "type": "number"
+          },
+          "evidenceVerified": {
+            "type": "boolean"
+          },
+          "indexStale": {
+            "type": "boolean"
+          },
+          "sameSlugDrafts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "argument": {
+            "type": "string"
+          },
+          "allowed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string"
+                },
+                "score": {
+                  "type": "number"
+                },
+                "hits": {
+                  "type": "number"
+                },
+                "lastHit": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "memory_status",
+      "description": "Report the state of memory for troubleshooting: entry counts and index size of both libraries, pending drafts, whether recall runs at full quality or keyword-only, how agent-sourced memories are routed, and configuration problems.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "evidenceSource": {
+            "type": "string",
+            "enum": [
+              "prestep-cache",
+              "snapshot-fallback",
+              "none"
+            ]
+          },
+          "indexStale": {
+            "type": "boolean"
+          },
+          "staleLibraries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "index": "# Memory Index\n\n- [Build command](build-command.md) — use the all-in-one build script\n",
+  "context": "[workspace-memory] 记忆索引。需要细节时调 memory_recall 取全文。\n\n## 本工作区\n- [Build command](build-command.md) — use the all-in-one build script\n\n## 所有项目（按需）\n- [Docs location](docs-location.md) — where the shared docs live"
+}
