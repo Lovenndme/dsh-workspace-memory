@@ -1299,7 +1299,7 @@ test 组其余题目没有用来调整过提示词。
 
 **过程中的意外**：06:12 系统清空了会话暂存目录，设计说明、接口约定、盘点文件丢失，已按最终状态重写进 docs/PANEL.md；第一轮客户端审查的 playwright 日志曾写进另一个仓库的当前目录（已移走、已核对干净），检查脚本因此改为先 cd 到临时目录。
 
-## 二十六、发布到 npm（2026-11-15）
+## 二十七、发布到 npm（2026-11-15）
 
 **包名**：`@lovenndme/dsh-workspace-memory`。裸名 `dsh-workspace-memory` 已被 `luyy9apples` 占用
 （npm 0.1.0，仓库 github.com/luyy9apples/dsh-workspace-memory），所以改用 scoped 名。
@@ -1336,6 +1336,34 @@ cron `0 */4 * * *` + `workflow_dispatch`（含 dry_run）→ tag 门禁 → patc
 不主动动它，等下次要统一来源时再按那条流程做。
 
 **副作用**：这次 HANDOFF 提交会被下一次 4 小时批量发成 0.8.3（任何提交都会触发一次 patch 发布，这是设计如此）。
+
+**启动页入口与前端加载排查（2026-11-16）**——详细结论与源码依据在 [docs/PANEL.md](docs/PANEL.md) §8。
+
+- **现象**：disable → enable 后宿主半是新的，但 `/memory_list` 显示宿主默认的折叠命令卡，右侧栏没有「记忆」页签。
+- **根因**：上面「发布到 npm」把包名改成 `@lovenndme/dsh-workspace-memory`（`a4eeb52`），`cordis.patch.yml` 跟着改了，
+  `client.js` 却仍以 `id: 'dsh-workspace-memory'` 注册。宿主 `dsh-client-modules` 按 **package.json 的 name** 找浏览器 factory：
+  id 对不上时浏览器报 `could not load … loaded without registering … via __ModuleLoader__.load`，插件条目不创建，
+  命令卡回落成 `GenericCommandCard`、页签与面板都不注册；profile 行名与 package.json 的 name 不一致时更糟——宿主根本不把它当客户端行，静默。
+  跟面板重写无关：同一份新 `client.js` 在改名前的包名下用真实加载器能正常物化。
+- **复现**：用 DSH 安装包里真实的 `dsh-client-modules`（宿主半 `lib/index.js` + 浏览器半 `lib/client.js`）在 Node 里组图、取 bundle、物化，
+  四种组合的结果表在 PANEL.md §8.3。复现脚本在会话暂存目录，会被清掉，结论以文档为准。
+- **修复**：`client.js` 的模块 id 改成 `@lovenndme/dsh-workspace-memory`；`test/client-logic.test.mjs` 新增「模块身份」一节，
+  断言 `client.js` 的 id、`package.json` 的 name、`cordis.patch.yml` 的行名三者相同。**以后改包名三处一起改。**
+- **启动页入口**：宿主「开始」页的入口来自页签类型定义的 `guide` 字段（`dsh-client-ui-sidebar-right` 的 `tab-registry.ts` / `GuideBody.tsx`），
+  `client.js` 的 `memoryTabDefinition()` 加了 `guide: [{ id: 'open', order: 70, title, description, icon }]`，点击由宿主 `openTab('memory-list')`。
+  「更多工具」卡被宿主固定画在所有入口之后，**排不到它下面**，`order: 70` 让「记忆」落在它正上方（内置入口最大是会话数据诊断 60）。
+  图标自绘（viewBox 16，描边 1 / 1.3，`currentColor`）。
+- **验证**：`npm test` 42 个文件全绿；`bash preview/verification/checks/run.sh` 迷你运行时与真 React 18.3.1 + StrictMode 各 67 项全过
+  （原 53 项 + 新增 `06-start-entry.check.js` 14 项）；`render-harness.html` 加了 `?view=guide`（「开始」页仿真，内置入口是写死的仿制品）、
+  `__harness.tabs` / `hostCalls` / `showGuide()`；迷你运行时改为跨多个根统计「本轮访问过的实例」（以前第二个根会把第一个根的组件当成已卸载）。
+- **未在真实 DSH 验证**：入口在真实「开始」页的位置与样式、点击后真的打开面板、修复后的前端在真实页面里加载——都只在仿真与真实加载器的 Node 复现里验证过。
+- **需要用户处理 / 决定**：
+  1. 修复要进 live 目录（提交并拉到插件目录）后才生效；宿主会轮询 `client.js` 的 mtime / 大小自动替换，没好就去「设置 → 插件 → 插件列表」点重试，
+     再不行 F12 打开开发者工具执行 `location.reload()`，或从托盘退出 DSH 再开（正式版没有 Ctrl+R）。
+  2. 如果插件列表里**没有**同步失败、页面载入后 `window.__DSH_BOOT__.entries` 里也没有本插件，说明 profile 里这一行的 `name` 不是新包名，需要按新包名重装（注意「pnpm remove 会删穿 link 目标」）。
+  3. 改名后 profile 自己的 `cordis.patch.yml` 里写了 `name: dsh-workspace-memory` 的覆盖项会被 `cordis-plugin-include` 整条跳过
+     （`patch: name mismatch … skipping`），里面的 `config`（如 `agentWrites`、`enableExtraction`）不再生效，要改成新包名或去掉 `name`。
+  4. 已发到 npm 的版本（0.8.2 起；0.8.1 只是 dry run）都带着这个 id 错位，从 npm 装的用户前端同样加载不上；修复提交推到 main 后 CI 会发下一个 patch 版本。
 
 ## 二十八、/memory 命令优化（2026-11-15）
 

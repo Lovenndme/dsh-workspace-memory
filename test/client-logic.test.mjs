@@ -73,7 +73,7 @@ console.log('== i18n：键对称、占位符一致、代码里引用的键都存
   check('中英文案的占位符一一对应', mismatched.length === 0, mismatched.join(', '))
 
   // 代码里以字面量写出的键（含多段，如 'ov.cell.open'）都必须在字典里
-  const prefixes = 'tab|action|nav|act|focus|layer|axis|type|src|time|unit|ov|pd|in|mm|guard|err|toast|st|dlg|reason'
+  const prefixes = 'tab|action|guide|nav|act|focus|layer|axis|type|src|time|unit|ov|pd|in|mm|guard|err|toast|st|dlg|reason'
   const literals = new Set([...source.matchAll(new RegExp(`'((?:${prefixes})\\.[A-Za-z.-]*[A-Za-z-])'`, 'g'))].map((m) => m[1]))
   const missing = [...literals].filter((key) => !(key in ZH) || !(key in EN))
   check(`代码里引用的 ${literals.size} 个字面量键都存在于 ZH 与 EN`, missing.length === 0, missing.join(', '))
@@ -511,6 +511,72 @@ console.log('\n== 界面语言：按 dsh-client-locale 的语言 id 注册与选
   check('没有 bind 时按 snapshot.active 选内联字典（en → 英文）', activate(fakeLocale('en', { withBind: false })).reasonText({ reason: 'not-found' }, 'F') === EN['reason.not-found'])
   check('没有 bind 时 zh-* 仍走中文内联字典', activate(fakeLocale('zh-TW', { withBind: false })).reasonText({ reason: 'not-found' }, 'F') === ZH['reason.not-found'])
   check('宿主 bind 不做插值时，占位符由插件补上', activate(fakeLocale('zh', { interpolate: false })).reasonText({ reason: 'agents-full', bytes: 9100, limit: 9000 }, 'F').includes('9100'))
+}
+
+console.log('\n== 模块身份：client.js 的 id = package.json 的 name = cordis.patch.yml 行的 name ==')
+{
+  // 宿主 dsh-client-modules 的规则（DSH 安装包里 dsh-client-modules 的 src/index.ts 与 src/client/system.ts）：
+  //  · 客户端行的 id 取 package.json 的 name，而且 profile 行的 name 必须等于它，否则这一行不算客户端行（静默不加载）；
+  //  · 浏览器按这个 id 等 factory 注册，client.js 用别的 id 注册时报「loaded without registering」。
+  // 2026-11-16：包名改成 @lovenndme/dsh-workspace-memory 后 client.js 仍用旧 id，前端整半没有加载（命令卡回落成默认卡、面板消失）。
+  const root = path.join(HERE, '..')
+  const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
+  check('client.js 注册的模块 id 等于 package.json 的 name', definition.id === pkg.name, `${definition.id} vs ${pkg.name}`)
+  const patch = readFileSync(path.join(root, 'cordis.patch.yml'), 'utf8')
+  const rowNames = [...patch.matchAll(/^\s*name:\s*['"]?([^'"\n#]+?)['"]?\s*$/gm)].map((m) => m[1])
+  check('cordis.patch.yml 插入的行名就是包名', rowNames.length === 1 && rowNames[0] === pkg.name, rowNames.join(', '))
+  check('package.json 声明 web 客户端并导出 ./client', pkg.dsh?.client?.platform === 'web' && pkg.exports?.['./client'] === './client.js' && pkg.files.includes('client.js'))
+}
+
+console.log('\n== 右侧栏「开始」页的「记忆」入口（页签定义的 guide 字段）==')
+{
+  // 记录 createElement 调用，看图标画了什么
+  const tree = (type, props, ...children) => ({ type, props: props || {}, children })
+  const plugin = definition.factory((name) => {
+    if (name === 'react') return { createElement: tree, useState: () => [null, () => {}] }
+    throw new Error(`unexpected require: ${name}`)
+  })
+  const own = captured
+  const def = own.memoryTabDefinition()
+  check('页签定义：id / kind 不变（面板本体按 id 注册在 sidebar.right.pane.tab）', def.id === own.TAB_ID && def.kind === own.TAB_KIND && def.id === 'dsh-workspace-memory/list' && def.kind === 'memory-list')
+  check('只有一个入口，入口 id 非空', Array.isArray(def.guide) && def.guide.length === 1 && typeof def.guide[0].id === 'string' && def.guide[0].id !== '')
+  const entry = def.guide[0]
+  // 内置入口的 order：文件 10、代码审查 15、终端 20、浏览器 30、会话数据诊断 60；「更多工具」卡由宿主固定画在最后
+  check('order 排在内置入口之后（「更多工具」正上方）', Number.isFinite(entry.order) && entry.order > 60, String(entry.order))
+  check('标题与说明是 thunk，走字典', entry.title() === ZH['guide.title'] && entry.description() === ZH['guide.description'])
+  check('没有快捷键（不声明 commandId）', !('commandId' in entry))
+  check('图标是组件', typeof entry.icon === 'function')
+
+  const big = entry.icon({ size: 22 })
+  const small = entry.icon({ size: 16, className: 'x' })
+  check('图标：svg，viewBox 16，尺寸取宿主传入的 size', big.type === 'svg' && big.props.viewBox === '0 0 16 16' && big.props.width === 22 && big.props.height === 22)
+  check('图标：线性（fill none + stroke currentColor），描边 22px 时 1、16px 时 1.3', big.props.fill === 'none' && big.props.stroke === 'currentColor' && big.props.strokeWidth === 1 && small.props.strokeWidth === 1.3)
+  check('图标：className 透传给宿主', small.props.className === 'x')
+  check('图标：装饰性（aria-hidden）', big.props['aria-hidden'] === 'true')
+  check('图标：不写字面颜色（颜色来自宿主给图标格设的 --dsw-alias-label-secondary）', !/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(JSON.stringify(big)))
+  check('图标：画了叠放的两张卡片与正文线', big.children.filter(Boolean).length === 3 && big.children.some((c) => c.type === 'rect'))
+
+  // apply 时用这份定义登记（含 guide）；英文界面下入口文案跟着变
+  const calls = []
+  const ctxFor = (active) => ({
+    effect: (fn) => {
+      try {
+        fn()
+      } catch {
+        // 样式表 effect 在 Node 里没有 document.createElement
+      }
+    },
+    get: (name) => {
+      if (name === 'sidebarRightTabs') return { register: (d) => { calls.push(d); return () => {} } }
+      if (name === 'locale') return { getLocale: () => ({ active }) }
+      return undefined
+    },
+    slots: { inject: () => {}, register: () => {} },
+  })
+  plugin.apply(ctxFor('zh'))
+  check('apply 向 sidebarRightTabs 登记的定义带 guide 入口', calls.length === 1 && calls[0].guide?.[0]?.title() === '记忆' && typeof calls[0].guide[0].icon === 'function', JSON.stringify(calls[0] && Object.keys(calls[0])))
+  definition.factory(requireStub).apply(ctxFor('en'))
+  check('英文界面：入口叫 Memory', calls.length === 2 && calls[1].guide[0].title() === EN['guide.title'] && EN['guide.title'] === 'Memory')
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASS' : `${failures} FAILURE(S)`}`)

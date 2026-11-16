@@ -13,11 +13,16 @@
     所以收下、丢弃、保存、删除、升级、增删章之后重读能看到变化。
   · 现在：固定为 fixture.now（相对时间与预览一致），?now=<ISO> 可改。
 
-  URL 参数：theme=light|dark · w=<面板宽度> · view=overview|pending|instructions|memories · ins=project
+  URL 参数：theme=light|dark · w=<面板宽度> · view=overview|pending|instructions|memories|guide · ins=project
             mem=<scope:id 或 id> · flow=1 · lang=en · strict=1（配合 react=）· data=empty|error|loading|old（old = 去掉新字段，模拟旧宿主）
             delay=<毫秒>（每个接口都延迟这么久返回，用来暴露「请求在途」的窗口）
+            view=guide：不看面板，看右侧栏「开始」页的仿真（宿主 GuideBody 的排法：内置入口 + 插件登记的 guide 入口按 order 排，
+            「更多工具」固定在最后；内置入口是写死的仿制品，只有「记忆」那一行来自 client.js 的真实登记），下面再挂一张 /memory_list 命令卡。
   脚本入口：window.__harness.unmount() 卸载面板并依次调用插件 ctx.effect 返回的清理函数（验证释放）；
-            window.__harness.posts 记录发出的每个 POST（路径 + 请求体）。检查脚本见 ./checks/。
+            window.__harness.posts 记录发出的每个 POST（路径 + 请求体）；
+            window.__harness.tabs 是插件向 sidebarRightTabs 登记的页签定义，window.__harness.hostCalls 记录插件与「开始」页仿真
+            调用的宿主动作（sidebarRight.openTab / layout.openRightbar / guide.openTab）；window.__harness.showGuide() 挂出「开始」页仿真。
+            检查脚本见 ./checks/。
   完成后 document.title 以 READY 开头；出错以 ERROR 开头。需要经 http 打开（例如 node 起一个只读静态服务）。
 -->
 <html lang="zh-CN" data-theme="light">
@@ -30,6 +35,17 @@
   .pv-root { min-height: 100vh; }
   .pv-stage { padding-top: 24px; }
   .pv-frame { height: calc(100vh - 92px) !important; }
+  /* 「开始」页仿真：照宿主 dsh-client-ui-sidebar-right 的 GuideBody.module.css 抄的胶囊样式（只用 token） */
+  #guide-stage { box-sizing: border-box; width: 440px; margin: 0 auto; padding: 24px 0; background: var(--dsw-alias-bg-base, transparent); }
+  .hg-guide { display: flex; flex-direction: column; gap: 14px; align-items: center; padding: 0 24px; }
+  .hg-entry { display: flex; gap: 14px; align-items: center; box-sizing: border-box; width: 380px; max-width: 100%; min-height: 56px; padding: 14px 20px;
+    color: var(--dsw-alias-label-primary); font: inherit; text-align: left; background: var(--dsw-alias-bg-layer-1);
+    border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xl, 16px); cursor: pointer; }
+  .hg-entry:hover { background: var(--dsw-alias-interactive-bg-hover); }
+  .hg-icon { display: flex; flex: none; align-items: center; justify-content: center; width: 26px; height: 26px; color: var(--dsw-alias-label-secondary); }
+  .hg-icon[data-placeholder] { color: var(--dsw-alias-label-tertiary); }
+  .hg-title { flex: 1; overflow: hidden; font-size: 14px; line-height: 1.4; white-space: nowrap; text-overflow: ellipsis; }
+  .hg-card { width: 380px; max-width: 100%; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -43,6 +59,7 @@
       </div>
       <div class="pv-slot" id="mount"></div>
     </div>
+    <div id="guide-stage" hidden></div>
   </div>
 </div>
 <script>
@@ -134,7 +151,7 @@ const MiniReact = (() => {
   /* ---- 打补丁 ---- */
   const SVG_NS = 'http://www.w3.org/2000/svg'
   const EVENT = { onChange: 'input', onFocus: 'focusin', onBlur: 'focusout', onDoubleClick: 'dblclick' }
-  const ATTR = { className: 'class', htmlFor: 'for', tabIndex: 'tabindex', spellCheck: 'spellcheck', strokeWidth: 'stroke-width' }
+  const ATTR = { className: 'class', htmlFor: 'for', tabIndex: 'tabindex', spellCheck: 'spellcheck', strokeWidth: 'stroke-width', strokeLinecap: 'stroke-linecap', strokeLinejoin: 'stroke-linejoin' }
   function proxy(e) { const fn = this.__h && this.__h[e.type]; if (fn) { if (!e.nativeEvent) e.nativeEvent = e; fn(e) } }
   function setProp(el, k, v, old) {
     if (k === 'children' || k === 'dangerouslySetInnerHTML') return
@@ -203,23 +220,26 @@ const MiniReact = (() => {
 
   function renderAll() {
     scheduled = false
-    for (const root of roots) {
-      visited = new Set()
+    // 多个根（面板 + 「开始」页仿真）：「这一轮没访问到的实例」要按所有根一起算，否则渲染第二个根时会把第一个根的组件当成已卸载
+    visited = new Set()
+    const all = []
+    roots.forEach((root, i) => {
       effects = []
       refs = []
       const out = []
-      expand(root.element, 'root', out)
+      expand(root.element, 'root' + i, out)
       if (!root.tree) { for (const v of out) root.container.appendChild(mount(v)) }
       else patchChildren(root.container, root.tree, out, false)
       root.tree = out
       for (const [oldRef, newRef, el] of refs) { if (oldRef) setRef(oldRef, null); if (newRef) setRef(newRef, el) }
-      for (const [path, inst] of instances) {
-        if (!visited.has(path)) { for (const s of inst.hooks) if (s && typeof s.cleanup === 'function') s.cleanup(); instances.delete(path) }
-      }
-      const run = (queue) => { for (const e of effects) if (e.queue === queue) { if (typeof e.s.cleanup === 'function') e.s.cleanup(); const c = e.fn(); e.s.cleanup = typeof c === 'function' ? c : null } }
-      run('layout')
-      run('effect')
+      all.push(...effects)
+    })
+    for (const [path, inst] of instances) {
+      if (!visited.has(path)) { for (const s of inst.hooks) if (s && typeof s.cleanup === 'function') s.cleanup(); instances.delete(path) }
     }
+    const run = (queue) => { for (const e of all) if (e.queue === queue) { if (typeof e.s.cleanup === 'function') e.s.cleanup(); const c = e.fn(); e.s.cleanup = typeof c === 'function' ? c : null } }
+    run('layout')
+    run('effect')
   }
   function render(element, container) { roots.push({ element, container, tree: null }); renderAll() }
   // 卸载：渲染空树，未再访问到的组件实例会跑 effect 清理
@@ -349,15 +369,20 @@ async function boot() {
   window.fetch = routeFetch
 
   let React = MiniReact.React, render = MiniReact.render, unmount = MiniReact.unmountAll
+  // 第二个挂载点（「开始」页仿真）：迷你运行时本来就支持多个根；真 React 另建一个 root，卸载时一起卸
+  let renderExtra = MiniReact.render
   const base = params.get('react')
   if (base) {
     await loadScript(base.replace(/\/$/, '') + '/react.development.js')
     await loadScript(base.replace(/\/$/, '') + '/react-dom.development.js')
     React = window.React
     // ?strict=1：包一层 StrictMode（开发态会把布局效果先卸再挂一次，检验 start / dispose 可重入）
+    const wrap = (el) => (params.get('strict') === '1' ? React.createElement(React.StrictMode, null, el) : el)
     let root = null
-    render = (el, container) => { root = window.ReactDOM.createRoot(container); root.render(params.get('strict') === '1' ? React.createElement(React.StrictMode, null, el) : el) }
-    unmount = () => root && root.unmount()
+    const extras = []
+    render = (el, container) => { root = window.ReactDOM.createRoot(container); root.render(wrap(el)) }
+    renderExtra = (el, container) => { const r = window.ReactDOM.createRoot(container); extras.push(r); r.render(wrap(el)) }
+    unmount = () => { if (root) root.unmount(); while (extras.length) extras.pop().unmount() }
   }
 
   let definition = null
@@ -366,11 +391,16 @@ async function boot() {
   const module = definition.factory((name) => { if (name === 'react') return React; throw new Error('unexpected require: ' + name) })
   const registered = {}
   const disposers = []
+  // 插件向宿主登记的页签定义（释放时移除，与宿主注册表一样）与调用过的宿主动作
+  const tabDefs = []
+  const hostCalls = []
   const ctx = {
     // 像宿主一样记下每个 effect 的清理函数，卸载时倒序调用
     effect(fn) { const d = fn(); if (typeof d === 'function') disposers.push(d); return typeof d === 'function' ? d : () => {} },
     get(name) {
-      if (name === 'sidebarRightTabs') return { register: () => () => {} }
+      if (name === 'sidebarRightTabs') return { register: (def) => { tabDefs.push(def); return () => { const i = tabDefs.indexOf(def); if (i >= 0) tabDefs.splice(i, 1) } } }
+      if (name === 'sidebarRight') return { openTab: (kind) => { hostCalls.push(['sidebarRight.openTab', kind]) } }
+      if (name === 'layout') return { openRightbar: (...args) => { hostCalls.push(['layout.openRightbar', ...args]) } }
       if (name === 'locale') return { getLocale: () => ({ active: params.get('lang') === 'en' ? 'en' : 'zh' }) }
       return undefined
     },
@@ -380,13 +410,56 @@ async function boot() {
   const Panel = registered['dsh-workspace-memory/list']
   if (!Panel) throw new Error('panel not registered')
   render(React.createElement(Panel, { sessionId: 'sess_demo_0001' }), document.getElementById('mount'))
+
+  /*
+   * 「开始」页仿真：照宿主 GuideBody 的排法——所有入口按 order 升序，「更多工具」卡固定在最后；点入口 = 宿主的
+   * tab.actions.openTab(kind, { replaceTab: true })。内置入口是写死的仿制品（order 抄自 DSH 安装包），只有插件那一行
+   * 来自 client.js 的真实登记，图标按宿主的方式当组件渲染（<Icon size={22} />）。
+   */
+  const BUILTIN_GUIDE = [
+    { kind: 'files', order: 10, zh: '工作区文件', en: 'Workspace files' },
+    { kind: 'review', order: 15, zh: '代码审查和变更', en: 'Review & changes' },
+    { kind: 'context', order: 17, zh: '上下文', en: 'Context' },
+    { kind: 'terminal', order: 20, zh: '新建终端', en: 'New terminal' },
+    { kind: 'browser', order: 30, zh: '浏览器', en: 'Browser' },
+    { kind: 'session-inspector', order: 60, zh: '会话数据诊断', en: 'Session diagnostics' },
+  ]
+  const en = params.get('lang') === 'en'
+  function GuideEmulation() {
+    const h = React.createElement
+    const fromPlugin = tabDefs.flatMap((def) => (def.guide || []).map((entry) => ({ entry, kind: def.kind, plugin: true })))
+    const builtins = BUILTIN_GUIDE.map((b) => ({ entry: { id: b.kind, order: b.order, title: () => (en ? b.en : b.zh) }, kind: b.kind, plugin: false }))
+    const rows = [...builtins, ...fromPlugin].sort((a, b) => a.entry.order - b.entry.order)
+    return h('div', { className: 'hg-guide', 'data-guide': '' },
+      ...rows.map(({ entry, kind, plugin }) => h('button', {
+        key: kind + ':' + entry.id, type: 'button', className: 'hg-entry', 'data-guide-kind': kind, 'data-guide-plugin': plugin ? 'true' : 'false',
+        onClick: () => { hostCalls.push(['guide.openTab', kind, { replaceTab: true }]) },
+      },
+      h('span', { className: 'hg-icon', 'data-placeholder': entry.icon ? undefined : '' }, entry.icon ? h(entry.icon, { size: 22 }) : null),
+      h('span', { className: 'hg-title' }, entry.title()))),
+      h('button', { key: 'more', type: 'button', className: 'hg-entry', 'data-guide-more': '' }, h('span', { className: 'hg-icon', 'data-placeholder': '' }), h('span', { className: 'hg-title' }, en ? 'More tools' : '更多工具')),
+      registered.memory_list ? h('div', { key: 'card', className: 'hg-card', 'data-guide-card': '' },
+        h(registered.memory_list, { sessionId: 'sess_demo_0001', node: { name: 'memory_list', outcome: { kind: 'ok', text: en ? 'Memory panel opened.' : '右侧栏已打开记忆面板。' } } })) : null)
+  }
+  let guideShown = false
+  function showGuide() {
+    const stage = document.getElementById('guide-stage')
+    stage.hidden = false
+    if (!guideShown) { guideShown = true; renderExtra(React.createElement(GuideEmulation), stage) }
+    return stage
+  }
+
   window.__harness = {
     posts: POSTS,
+    tabs: tabDefs,
+    hostCalls,
+    registeredKeys: () => Object.keys(registered),
+    showGuide,
     // 卸载面板并释放插件：返回释放后还残留什么（应全部为 false / 0）
     unmount() {
       unmount()
       while (disposers.length) { try { disposers.pop()() } catch (error) { console.error(error) } }
-      return { panelLeft: !!document.querySelector('.wsm-panel'), styleLeft: !!document.querySelector('style[data-dsh-workspace-memory]') }
+      return { panelLeft: !!document.querySelector('.wsm-panel'), styleLeft: !!document.querySelector('style[data-dsh-workspace-memory]'), tabsLeft: tabDefs.length }
     },
   }
 
@@ -400,6 +473,14 @@ async function boot() {
   await wait('.wsm-cell')
   await pause(80)
   const view = params.get('view')
+  if (view === 'guide') {
+    document.getElementById('frame').style.display = 'none'
+    showGuide()
+    await wait('[data-guide-plugin="true"]')
+    await pause(120)
+    document.title = 'READY'
+    return
+  }
   const order = ['overview', 'pending', 'instructions', 'memories']
   if (view && view !== 'overview') { document.querySelectorAll('.wsm-tab')[order.indexOf(view)].click(); await pause(120) }
   if (view === 'instructions' && params.get('ins') === 'project') { (await wait('.wsm-seg > button:nth-of-type(2)')).click(); await pause(120) }

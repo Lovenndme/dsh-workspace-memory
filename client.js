@@ -8,6 +8,11 @@
  *     顶部导航「总览 · 待确认 · 指令 · 记忆」，按「在哪儿生效（所有项目 / 本项目）× 什么时候读（每轮都读 / 用到才查）」
  *     把四处存储（全局指令 = ~/.dsh/AGENTS.md、项目指令 = 工作区的 AGENTS.md / AGENTS.local.md、通用记忆 = 全局按需库、
  *     项目记忆 = 项目库）摆成一张地图。
+ *     右侧栏「开始」页上有一个「记忆」入口：页签定义里的 `guide` 字段，点它由宿主按 kind 打开本页签（见 docs/PANEL.md）。
+ *
+ * 模块 id 必须与 package.json 的 name 完全相同（现在是 @lovenndme/dsh-workspace-memory）：宿主的 dsh-client-modules
+ * 按包名找这个 factory，对不上时浏览器报「loaded without registering」，命令卡回落成宿主默认卡、面板不出现。
+ * 改包名时这里与 cordis.patch.yml 的 name 一起改（test/client-logic.test.mjs「模块身份」一节守着）。
  *
  * 数据通道是宿主 HTTP 路由（/api/dsh-workspace-memory/*）。
  *
@@ -26,7 +31,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: 'dsh-workspace-memory',
+  id: '@lovenndme/dsh-workspace-memory',
 
   factory(require) {
     const React = require('react')
@@ -45,6 +50,8 @@ window.__ModuleLoader__.load({
     const ZH = {
       'tab.title': '记忆',
       'action.openPanel': '打开记忆面板',
+      'guide.title': '记忆',
+      'guide.description': '查看和整理记忆与指令',
 
       'nav.label': '记忆面板',
       'nav.overview': '总览',
@@ -555,6 +562,8 @@ window.__ModuleLoader__.load({
     const EN = {
       'tab.title': 'Memory',
       'action.openPanel': 'Open memory panel',
+      'guide.title': 'Memory',
+      'guide.description': 'Review memories and instructions',
 
       'nav.label': 'Memory panel',
       'nav.overview': 'Overview',
@@ -6584,6 +6593,60 @@ window.__ModuleLoader__.load({
     /** sessionStorage 不可用时的进程内兜底，避免退化成「每次挂载都开」。 */
     const openedFallback = new Set()
 
+    /* -------------------------------------- 右侧栏「开始」页的「记忆」入口 */
+
+    /**
+     * 「开始」页（宿主 dsh-client-ui-sidebar-right 的 guide 页签）的入口来自各页签类型定义里的 `guide` 数组：
+     * 宿主按 `order` 升序排出所有入口，「更多工具」卡永远排在最后（GuideBody.tsx），所以没法排到它下面；
+     * order 取比内置入口都大的值（文件 10、代码审查 15、终端 20、浏览器 30、会话数据诊断 60），排在「更多工具」正上方。
+     * 点击由宿主处理：`tab.actions.openTab(kind, { replaceTab: true })`，按 kind 打开本页签，与 openMemoryPanel 同一条路。
+     */
+    const GUIDE_ENTRY = { id: 'open', order: 70 }
+
+    /**
+     * 入口图标：两张叠放的记忆卡片 + 正文两行（与插件图标 icon.svg 同一个意象）。
+     * 宿主传入 size（入口只有标题时 22、带说明时 26），颜色走 currentColor——宿主给图标格设的是
+     * var(--dsw-alias-label-secondary)，这里不写任何颜色。viewBox 16，描边 1（小于 20px 时 1.3，与宿主线性图标同规格）。
+     */
+    function MemoryGuideIcon({ size, className }) {
+      const s = Number(size) > 0 ? Number(size) : 16
+      return h0(
+        'svg',
+        {
+          width: s,
+          height: s,
+          viewBox: '0 0 16 16',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: s >= 20 ? 1 : 1.3,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          focusable: 'false',
+          className,
+        },
+        h0('path', { d: 'M5.5 3.5V3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-.5' }),
+        h0('rect', { x: 2.5, y: 5, width: 9, height: 9, rx: 1.2 }),
+        h0('path', { d: 'M4.8 8.2h4.4M4.8 10.8h2.8' }),
+      )
+    }
+
+    /** 页签定义：stage one（这个类型是什么、开始页上要不要入口）；面板本体另经 sidebar.right.pane.tab 按 TAB_ID 注册。 */
+    function memoryTabDefinition() {
+      return {
+        id: TAB_ID,
+        kind: TAB_KIND,
+        title: () => t('tab.title'),
+        guide: [{
+          id: GUIDE_ENTRY.id,
+          order: GUIDE_ENTRY.order,
+          title: () => t('guide.title'),
+          description: () => t('guide.description'),
+          icon: MemoryGuideIcon,
+        }],
+      }
+    }
+
     function openMemoryPanel(ctx) {
       if (!ctx) return
       try {
@@ -6690,6 +6753,10 @@ window.__ModuleLoader__.load({
         KNOWN_REASONS,
         TYPES,
         STYLESHEET,
+        memoryTabDefinition,
+        MemoryGuideIcon,
+        TAB_KIND,
+        TAB_ID,
         dictionaries: { ZH, EN },
       })
     }
@@ -6811,7 +6878,8 @@ window.__ModuleLoader__.load({
           }
 
           try {
-            ctx.effect(() => tabs.register({ id: TAB_ID, kind: TAB_KIND, title: () => t('tab.title') }))
+            // 带 guide 入口：右侧栏「开始」页多一行「记忆」，点它打开本页签（宿主不认识 guide 的旧版本会忽略这个字段）
+            ctx.effect(() => tabs.register(memoryTabDefinition()))
           } catch (error) {
             console.error('[workspace-memory] tabs.register 失败', error)
           }
