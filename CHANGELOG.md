@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.5 — 2026-11-17
+
+- docs: record the memory-only write route (HANDOFF 29) and its re-evaluation
+- feat(write): auto-captured memories never go into AGENTS.md (align with Claude Code)
+
+
 ## 0.8.4 — 2026-11-16
 
 - fix(storage): never overwrite a history copy written in the same millisecond
